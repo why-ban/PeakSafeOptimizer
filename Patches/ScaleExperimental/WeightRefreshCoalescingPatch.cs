@@ -168,6 +168,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             int hash = 17;
             int count = characters.Count;
             hash = unchecked(hash * 31 + count);
+            // ThornOnMe.GetThornDamage() multiplies by this global value. Include its exact bit
+            // pattern so a same-frame multiplier change cannot reuse an old folded signature.
+            hash = unchecked(hash * 31 + BitConverter.SingleToInt32Bits(Ascents.etcDamageMultiplier));
 
             // Global stuck-item inventory: UpdateWeight iterates ALL_STUCK_ITEMS for every character,
             // so its contents (count, target identity, and both increments) are folded once here.

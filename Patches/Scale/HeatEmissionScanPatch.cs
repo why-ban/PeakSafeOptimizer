@@ -151,6 +151,16 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
+            float radius = __instance.radius;
+            float radiusSqr = radius * radius;
+            if (radius > 0f && (!(radiusSqr > 0f) || float.IsInfinity(radiusSqr)))
+            {
+                // Decide before any field write. Falling back after counter reset would make the
+                // original add delta a second time and leave a different counter value.
+                RateLimitedDiagnostics.Hit("HeatEmissionScan.radius-out-of-square-range");
+                return true;
+            }
+
             // Step 1: unchanged position write.
             selfTransform.position = hipTransform.position;
 
@@ -167,7 +177,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             }
             counterRef(__instance) = 0f;
 
-            float radius = __instance.radius;
             if (!(radius > 0f))
             {
                 // radius <= 0 or NaN: the original `Distance < radius` is false for every
@@ -176,9 +185,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return false;
             }
 
-            float radiusSqr = radius * radius;
-            if (!(radiusSqr > 0f) || float.IsInfinity(radiusSqr))
-                return true;
             Vector3 origin = selfTransform.position;
             float heatAmount = __instance.heatAmount;
             bool ownerShortCircuit = _ownerShortCircuitProven;

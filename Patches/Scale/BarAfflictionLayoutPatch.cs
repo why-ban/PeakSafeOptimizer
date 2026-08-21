@@ -9,9 +9,9 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// Redundant-layout-write filter for BarAffliction.UpdateAffliction() (audited source
     /// BarAffliction.cs:58-61). The width property is a property (BarAffliction.cs:17-27) whose
     /// getter reads rtf.sizeDelta.x and whose setter writes rtf.sizeDelta, dirtying the Canvas
-    /// layout, even after the bar has converged to its target size. When Mathf.Approximately(width,
-    /// size), Mathf.Lerp(width, size, t) yields width again and the setter write is a no-op; the
-    /// prefix skips the original in that case and defers otherwise.
+    /// layout, even after the bar has converged to its target size. The Prefix computes the exact
+    /// vanilla Lerp result and skips only when that result is bit-for-bit equal to the current width,
+    /// making the setter write a true no-op.
     ///
     /// rtf is read through a UnityEngine.Object accessor because RectTransform lives in
     /// UnityEngine.UIModule, which this project does not reference.

@@ -44,8 +44,8 @@ namespace PeakSafeOptimizer.Infrastructure
         /// Backwards-compatible overload kept for existing patch modules. <c>requireCurrentMvid</c>
         /// is a per-patch audited-build requirement and also infers a <see cref="CompatibilityLevel"/>:
         /// a Transpiler maps to <see cref="CompatibilityLevel.StrictIl"/>, a legacy
-        /// <c>requireCurrentMvid: true</c> (always a full-replacement Prefix in this codebase) maps to
-        /// <see cref="CompatibilityLevel.Fingerprint"/>, everything else to
+        /// <c>requireCurrentMvid: true</c> (used for full replacements and state-repair guards in this
+        /// codebase) maps to <see cref="CompatibilityLevel.Fingerprint"/>, everything else to
         /// <see cref="CompatibilityLevel.Structural"/>.
         /// </summary>
         public PatchDefinition(

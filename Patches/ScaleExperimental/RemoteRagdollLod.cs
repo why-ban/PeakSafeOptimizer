@@ -81,6 +81,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             internal int Tier;
             internal int LastFrame = int.MinValue;
             internal bool LastResult;
+            internal int LastItemId = int.MinValue;
             /// <summary>Distinct frames seen at full behaviour; capped at <see cref="WarmupFrames"/>.</summary>
             internal int FullFrames;
         }
@@ -177,20 +178,39 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (c == null)
                 return false;
 
-            // One evaluation per character per rendered frame. Animate/AddMovementForce are called
-            // from physics while CharacterAnimations.Update is rendered; sharing this decision
-            // avoids contradictory transitions between those call families.
-            int frame = Time.frameCount;
-            if (states.TryGetValue(c, out State cached) && cached.LastFrame == frame)
-                return cached.LastResult;
-
             CharacterData data = c.data;
             Character.CharacterRefs refs = c.refs;
             Character local = Character.localCharacter;
             if (data == null || refs == null || local == null)
                 return false;
 
+            int frame = Time.frameCount;
             State state = states.GetOrCreateValue(c);
+            // Checked before the per-frame cache on purpose. CharacterItems.Equip writes
+            // data.currentItem and then, in the same rendered frame, drives
+            // ragdoll.FixedUpdate()/SnapToAnimation() manually before sinceItemAttach is reset.
+            // Reusing a cached downgrade there would let SnapToAnim consume stale animation targets.
+            int itemId = data.currentItem != null ? data.currentItem.GetInstanceID() : 0;
+            if (state.LastItemId == int.MinValue)
+            {
+                state.LastItemId = itemId;
+            }
+            else if (state.LastItemId != itemId)
+            {
+                state.LastItemId = itemId;
+                state.Tier = TierFull;
+                state.FullFrames = 0;
+                state.LastResult = false;
+                state.LastFrame = frame;
+                return false;
+            }
+
+            // One evaluation per character per rendered frame. Animate/AddMovementForce are called
+            // from physics while CharacterAnimations.Update is rendered; sharing this decision
+            // avoids contradictory transitions between those call families.
+            if (state.LastFrame == frame)
+                return state.LastResult;
+
             bool warmed = state.FullFrames >= WarmupFrames;
             bool result = warmed && Evaluate(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef, state.Tier);
             if (!warmed)
@@ -350,6 +370,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isVineClimbing", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isKinecmatic", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "sinceItemAttach", typeof(float));
+            ScaleValidation.RequireInstanceProperty(typeof(CharacterData), "currentItem", typeof(Item));
             ScaleValidation.RequireInstanceProperty(typeof(CharacterData), "dead", typeof(bool));
             ScaleValidation.RequireInstanceProperty(
                 typeof(CharacterData), "currentRagdollControll", typeof(float));

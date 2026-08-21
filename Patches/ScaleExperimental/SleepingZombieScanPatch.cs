@@ -152,7 +152,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             {
                 Character candidate = all[i];
                 if (candidate == null)
-                    continue;
+                {
+                    RateLimitedDiagnostics.Hit("SleepingZombieScan.candidate-null");
+                    return true;
+                }
                 if (!targetIsValid(__instance, candidate))
                     continue;
 

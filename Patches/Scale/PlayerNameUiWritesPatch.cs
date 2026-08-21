@@ -4,6 +4,7 @@ using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using Peak.Network;
+using PeakSafeOptimizer.Diagnostics;
 using Photon.Pun;
 using UnityEngine;
 
@@ -275,23 +276,34 @@ namespace PeakSafeOptimizer.Patches.Scale
             bool isMuted = false;
             if (visible)
             {
-                otherPlayer = other.player;
-                if (getCannibalismSetting(__instance) == null || audioSprites == null ||
-                    audioSprites.Length == 0 || otherPlayer == null)
+                // The audited original reads the Photon owner and audio level after its first UI
+                // writes. Any exception in that chain must reproduce through the untouched original,
+                // so it is caught here and handed back before this patch writes anything.
+                try
                 {
-                    return true;
-                }
-
-                string userId = NetworkingUtilities.GetUserId(otherPlayer);
-                if (userId == null)
-                    return true;
-                isMuted = AudioLevels.GetPlayerLevel(userId) == 0f;
-                if (!isMuted)
-                {
-                    view = other.photonView;
-                    photonOwner = view != null ? getPhotonOwner(view) : null;
-                    if (view == null || photonOwner == null)
+                    otherPlayer = other.player;
+                    if (getCannibalismSetting(__instance) == null || audioSprites == null ||
+                        audioSprites.Length == 0 || otherPlayer == null)
+                    {
                         return true;
+                    }
+
+                    string userId = NetworkingUtilities.GetUserId(otherPlayer);
+                    if (userId == null)
+                        return true;
+                    isMuted = AudioLevels.GetPlayerLevel(userId) == 0f;
+                    if (!isMuted)
+                    {
+                        view = other.photonView;
+                        photonOwner = view != null ? getPhotonOwner(view) : null;
+                        if (view == null || photonOwner == null)
+                            return true;
+                    }
+                }
+                catch (Exception)
+                {
+                    RateLimitedDiagnostics.Hit("PlayerNameUiWrites.owner-lookup-failed");
+                    return true;
                 }
             }
 

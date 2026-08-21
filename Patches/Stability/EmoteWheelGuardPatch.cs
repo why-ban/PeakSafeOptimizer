@@ -11,15 +11,12 @@ namespace PeakSafeOptimizer.Patches.Stability
     /// every frame from GUIManager.LateUpdate.
     ///
     /// Root cause (confirmed in-game, 2315 occurrences in one multiplayer session):
-    /// UpdateEmoteWheel dereferences Character.localCharacter in both of its branches, and its guard
-    /// expression calls the canEmote getter (GUIManager.cs:303-313), which dereferences
-    /// Character.localCharacter.data.dead and Character.localCharacter.refs.stats.won. When the
-    /// local character is null or destroyed (spectating / respawn / quitting), every LateUpdate
-    /// throws NullReferenceException and the log floods.
+    /// the canEmote guard and UpdateEmoteWheel both depend on a complete local character graph.
+    /// During spectating, respawn, quit, or a partial teardown, localCharacter, data, refs, or stats
+    /// can be unavailable even though the call reaches this method through a third-party path.
     ///
-    /// This Prefix is read-only: it only checks Character.localCharacter with Unity object semantics
-    /// and skips the original when the character is gone. It never writes any state and never
-    /// changes behavior for any frame where a local character exists.
+    /// This Prefix is read-only: it checks the complete member chain with Unity object semantics and
+    /// skips the original when any dependency is unavailable. It never writes state.
     /// </summary>
     internal static class EmoteWheelGuardPatch
     {
@@ -34,6 +31,15 @@ namespace PeakSafeOptimizer.Patches.Stability
             {
                 throw new InvalidOperationException("Character.localCharacter failed structural self-check");
             }
+
+            // Members the extended guard chain reads. Any reshape fails the patch closed instead of
+            // letting the guard silently stop covering the audited canEmote dependencies.
+            StabilityPatchValidation.RequireInstanceField(
+                typeof(Character), "data", typeof(CharacterData));
+            StabilityPatchValidation.RequireInstanceField(
+                typeof(Character), "refs", typeof(Character.CharacterRefs));
+            StabilityPatchValidation.RequireInstanceField(
+                typeof(Character.CharacterRefs), "stats", typeof(CharacterStats));
         }
 
         internal static MethodInfo ResolveAndValidateTarget()
@@ -51,7 +57,14 @@ namespace PeakSafeOptimizer.Patches.Stability
         {
             // Unity null semantics: false for both a null reference and a destroyed object.
             if ((bool)Character.localCharacter)
-                return true;
+            {
+                Character local = Character.localCharacter;
+                if (local.data != null && local.refs != null && local.refs.stats != null)
+                    return true;
+
+                RateLimitedDiagnostics.Hit("EmoteWheelGuard.localCharacter-members-unavailable");
+                return false;
+            }
 
             RateLimitedDiagnostics.Hit("EmoteWheelGuard.localCharacter-unavailable");
             return false;

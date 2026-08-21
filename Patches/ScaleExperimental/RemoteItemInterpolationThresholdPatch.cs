@@ -24,10 +24,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///   - rig is present, PhotonNetwork.InRoom, and !m_photonView.IsMine
     ///   - RemoteValue.IsSome, shouldSync, itemState == Ground, m_lastPos.IsSome
     ///   - debug == false (never suppress the original's diagnostics)
-    ///   - the interpolated target equals rig.position within 0.0005 m
-    ///   - the remote rotation is within 0.05 degrees of rig.rotation
-    /// In that state the original would call MovePosition(position + delta * 0.5f) with a delta far
-    /// below float precision relevance and RotateTowards over a sub-0.05 degree gap.
+    ///   - the interpolated target is bitwise equal to rig.position
+    ///   - the remote rotation's four components are bitwise equal to rig.rotation
+    /// In that state the original MovePosition and MoveRotation calls are exact no-ops.
     ///
     /// Everything else returns true. Crucially, when the patch skips it also advances
     /// sinceLastPackage exactly like the original does (fixedDeltaTime * 0.6f) and writes

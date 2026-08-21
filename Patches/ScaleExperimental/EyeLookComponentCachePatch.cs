@@ -200,7 +200,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             {
                 Character candidate = all[i];
                 if (candidate == null)
-                    continue;
+                {
+                    RateLimitedDiagnostics.Hit("EyeLookComponentCache.candidate-null");
+                    return true;
+                }
                 if (ResolveMouth(mouths, candidate) == null)
                 {
                     // The original would throw a NullReferenceException on component.isSpeaking.
@@ -232,6 +235,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             for (int i = 0; i < all.Count; i++)
             {
                 Character candidate = all[i];
+                // Pre-validated above: a null candidate already deferred to the original before any
+                // state write. This is only a defensive guard so a mid-method roster mutation cannot
+                // throw after this patch has started writing.
                 if (candidate == null)
                     continue;
 

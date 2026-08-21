@@ -74,7 +74,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | A3 | `BugleClipGuard` | 军号 | 仍能吹响；`IndexOutOfRangeException` 不再出现；与装了曲目模组的玩家曲目不同属可接受降级 |
 | A4 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
 | A5 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
-| A6 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE |
+| A6 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；记录命中的是 localCharacter 还是 data/refs/stats 不完整诊断 |
 
 ### 2.2 等价改写与规模化（15 项，13 组）
 
@@ -111,7 +111,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 | 步骤 | 补丁 | 场景 | 通过条件 |
 |---|---|---|---|
-| D1 | 四项 `RemoteRagdollLod*` | 一名远端玩家从 40 米走到 70 米再返回 | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战与装备切换始终完整运行 |
+| D1 | 四项 `RemoteRagdollLod*` | 一名远端玩家从 40 米走到 70 米再返回并切换装备 | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态 |
 | D2 | `JointProjection` | 正常角色生成与其它模组运行时建 rig（若存在） | 正常游戏无差异、无 null/反射异常；审计构建中预期通常不触发 |
 | D3 | `DetailBodypartThrottle` | 8 人近距聚集、移动、抓取、攀爬、倒地 | 本地角色不受影响；远端手指/jiggle/嘴颌轻微降帧可接受；关节不漂浮、不爆力、不出现 NaN |
 

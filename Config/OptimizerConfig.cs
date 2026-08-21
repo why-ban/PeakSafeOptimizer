@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using BepInEx.Configuration;
 
@@ -182,13 +181,6 @@ namespace PeakSafeOptimizer.Config
             }
             id = default;
             return false;
-        }
-
-        public ConfigEntry<bool> BindExperimental(ConfigFile config, string name, string description)
-        {
-            if (string.Equals(name, "EnableAllExperimental", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("EnableAllExperimental is prohibited; bind each experiment independently.", nameof(name));
-            return config.Bind("Experimental", name, false, description);
         }
 
         public static OptimizerConfig Bind(ConfigFile config)

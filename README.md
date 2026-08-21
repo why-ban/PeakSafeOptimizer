@@ -51,7 +51,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - 日志中的大量异常均来自**游戏原版代码或其它模组**，本插件逐项定位后新增守卫：
   - `BugleSFX.Update` 每帧 `IndexOutOfRangeException`（654 次）——已由 `Fixes.BugleClipGuard` 消除到 0，并记录到 3 次 `currentClip-out-of-range` 修复。
   - `RopeClimbingAPI.GetSegmentFromPercent → CharacterRopeHandling.Climbing` 每帧 `ArgumentOutOfRangeException`（184 次）——已由 `Fixes.RopeSegmentGuard` 消除。
-  - `GUIManager.get_canEmote → UpdateEmoteWheel → LateUpdate` 每帧 `NullReferenceException`（2315 次）——已由 `Fixes.EmoteWheelGuard` 消除。
+  - `GUIManager.get_canEmote → UpdateEmoteWheel → LateUpdate` 每帧 `NullReferenceException`（2315 次）——已由 `Fixes.EmoteWheelGuard` 对 localCharacter/data/refs/stats 不完整窗口进行防御。当前反编译原版 LateUpdate 已有外层 localCharacter 守卫，因此仍需实机日志确认历史异常究竟来自成员级空窗还是第三方直接调用。
   - `CharacterItems.GetItemPosRight → CharacterAnimations.ConfigureIK → CharacterRagdoll.FixedUpdate` 每帧 `NullReferenceException`（135 次）——已由 `Fixes.IKItemGuard` 消除。
 - 13 次 `RPC method 'RPC_SetSongByName(String)' not found` 属于**其他玩家安装的自定义军号曲目模组**，本机不存在该 RPC 方法，本插件无法修复。
 - 排查本插件问题请按 `PeakSafeOptimizer` 关键字过滤，避免与其它模组（如 `PeakStatsEx`、`PEAK_Visuals`）产生的异常混淆。
@@ -71,7 +71,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.BugleClipGuard` | `true` | Fingerprint | Prefix（只改状态）：`BugleSFX.Update()` | 修越界的 `currentClip`（负数归零、超界按 `% Length` 映射、数组空则标记跳过）。根因是原版 `RPC_StartToot` 不校验索引 + 跨客户端曲目模组不一致。副作用是本机曲目可能与发送方不同。 |
 | `Fixes.RopeSegmentGuard` | `true` | Fingerprint | Prefix：`CharacterRopeHandling.Climbing()` | 当所持绳索的 `GetRopeSegments()` 为 null/空，或 `climbingAPI` 为 null 时跳过该帧攀爬。守卫每帧入口而非底层 API，避免把异常换成 `NullReferenceException`。 |
 | `Fixes.IKItemGuard` | `true` | Fingerprint | Prefix：`CharacterAnimations.ConfigureIK()` | 当 `currentItem` 非空但 prefab 缺 `Hand_R`/`Hand_L` 子节点时跳过该帧手部 IK 定位。只在手部节点缺失时跳过，ReachIK 分支不受影响。 |
-| `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | 当 `Character.localCharacter` 为 null/已销毁（观战/重生/退出瞬间）时跳过表情轮更新。只读不写。 |
+| `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | 当 `Character.localCharacter`、data、refs 或 stats 在观战/重生/退出/第三方调用窗口中不完整时跳过表情轮更新。只读不写。 |
 
 ### 等价改写（`Patches\Equivalent`，2 项）
 
