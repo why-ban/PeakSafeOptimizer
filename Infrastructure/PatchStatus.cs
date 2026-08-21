@@ -25,6 +25,11 @@ namespace PeakSafeOptimizer.Infrastructure
         SkippedStructureMismatch,
         /// <summary>The patch's own IL match / IL generation rejected this game build.</summary>
         SkippedIlMismatch,
+        /// <summary>
+        /// The patch replaces audited behavior and therefore only runs when the game build MVID is
+        /// certified. Structural-only guards may still validate and run on an unknown build.
+        /// </summary>
+        SkippedUncertifiedBuild,
         FailedFactory,
         FailedInitialize,
         FailedResolve,
@@ -72,6 +77,7 @@ namespace PeakSafeOptimizer.Infrastructure
                 case PatchResult.SkippedNotInstalled:
                 case PatchResult.SkippedStructureMismatch:
                 case PatchResult.SkippedIlMismatch:
+                case PatchResult.SkippedUncertifiedBuild:
                     return PatchOutcome.Skipped;
                 default:
                     return PatchOutcome.Failed;
@@ -90,7 +96,8 @@ namespace PeakSafeOptimizer.Infrastructure
 
         /// <summary>
         /// "certified" when the game assembly MVID equals the audited one, "structural-validation"
-        /// otherwise. In both modes every patch is attempted and only its own validation can skip it.
+        /// otherwise. Structural patches validate independently in both modes; patches that replace
+        /// audited behavior may require the certified build before their own validation runs.
         /// </summary>
         public string CompatibilityMode { get; internal set; } = "unknown";
 
@@ -125,8 +132,8 @@ namespace PeakSafeOptimizer.Infrastructure
                 Line($"compatibility mode: {CompatibilityMode}"),
                 Line(string.Equals(CompatibilityMode, "certified", StringComparison.Ordinal)
                     ? "mode meaning: MVID matches the audited build; patch validation still runs and is still authoritative."
-                    : "mode meaning: MVID is unknown (game update or different build). MVID alone never skips a patch; " +
-                      "each patch is attempted and only its own validation can skip it.")
+                    : "mode meaning: MVID is unknown (game update or different build). Structural guards still " +
+                      "validate independently; behavior-replacement patches requiring the audited build skip safely.")
             };
             lines.Add(Line($"totals: registered={_entries.Count}, enabled={enabled}, applied={applied}, " +
                            $"skipped={skipped}, failed={failed}, module-failures={_moduleFailures.Count}"));

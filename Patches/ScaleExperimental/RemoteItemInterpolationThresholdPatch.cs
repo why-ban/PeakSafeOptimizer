@@ -38,9 +38,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     internal static class RemoteItemInterpolationThresholdPatch
     {
         private const string RigidbodyTypeName = "UnityEngine.Rigidbody";
-        private const float PositionEpsilon = 0.0005f;
-        private const float PositionEpsilonSqr = PositionEpsilon * PositionEpsilon;
-        private const float AngleEpsilonDegrees = 0.05f;
 
         private static AccessTools.FieldRef<ItemPhysicsSyncer, Item> _item;
         private static AccessTools.FieldRef<ItemPhysicsSyncer, PhotonView> _photonView;
@@ -263,11 +260,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             Vector3 interpolated = Vector3.Lerp(lastPos.Value, target, t);
             Vector3 rigPosition = rigPositionRef(rig);
             Vector3 delta = interpolated - rigPosition;
-            if (delta.sqrMagnitude >= PositionEpsilonSqr)
+            if (delta.sqrMagnitude != 0f)
                 return true;
 
             Quaternion rigRotation = rigRotationRef(rig);
-            if (Quaternion.Angle(rigRotation, dataRotationRef(data)) >= AngleEpsilonDegrees)
+            Quaternion targetRotation = dataRotationRef(data);
+            if (rigRotation.x != targetRotation.x || rigRotation.y != targetRotation.y ||
+                rigRotation.z != targetRotation.z || rigRotation.w != targetRotation.w)
                 return true;
 
             // Settled: apply the original's non-physics side effects, then skip only the two

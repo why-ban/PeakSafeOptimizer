@@ -209,6 +209,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 }
             }
 
+            Renderer[] renderers = __instance.eyeRenderers;
+            if (renderers == null)
+            {
+                RateLimitedDiagnostics.Hit("EyeLookComponentCache.eyeRenderers-null");
+                return true;
+            }
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                if (renderers[i] == null)
+                {
+                    RateLimitedDiagnostics.Hit("EyeLookComponentCache.eyeRenderer-null");
+                    return true;
+                }
+            }
+
             // PlayerEyeLook.cs:60-61
             charactersRef(__instance) = all;
             __instance.distance = float.PositiveInfinity;
@@ -294,22 +309,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 eyeTargetRef(__instance),
                 Time.deltaTime * __instance.lookSmoothing * num4);
 
-            Renderer[] renderers = __instance.eyeRenderers;
-            if (renderers == null)
-            {
-                // Preserve the original's NullReferenceException instead of swallowing it.
-                RateLimitedDiagnostics.Hit("EyeLookComponentCache.eyeRenderers-null");
-                return true;
-            }
             Vector2 eyePos = eyePosRef(__instance);
             for (int j = 0; j < renderers.Length; j++)
             {
                 Renderer renderer = renderers[j];
-                if (renderer == null)
-                {
-                    RateLimitedDiagnostics.Hit("EyeLookComponentCache.eyeRenderer-null");
-                    continue;
-                }
                 renderer.material.SetVector("_EyePosition", eyePos);
             }
 

@@ -15,9 +15,11 @@ namespace PeakSafeOptimizer.Patches.Scale
                 prefix: () => new HarmonyMethod(
                     typeof(RagdollPhysicsMatsPatch),
                     nameof(RagdollPhysicsMatsPatch.Prefix)),
+                postfix: () => new HarmonyMethod(
+                    typeof(RagdollPhysicsMatsPatch),
+                    nameof(RagdollPhysicsMatsPatch.Postfix)),
                 requireCurrentMvid: true,
                 reset: RagdollPhysicsMatsPatch.Reset));
-            context.RegisterCleanup(RagdollPhysicsMatsPatch.Reset);
         }
     }
 }

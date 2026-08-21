@@ -18,25 +18,26 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 ## 兼容性模型（MVID 不再是全局硬门控）
 
-当前版本的关键变化：**MVID 只作为诊断信息与风险提示**，不再是「匹配才安装、不匹配全灭」的全局开关。
+当前版本的关键变化：**MVID 不是全局硬门控，而是逐补丁的兼容条件**。结构级守卫可以在未知构建上继续自验；完整替换、网络语义改写和 Transpiler 在尚未提供方法级行为指纹前只在审计 MVID 上安装。
 
 - 启动时读取游戏 Assembly-CSharp 的 MVID 并与其 SHA-256 一起输出一行指纹日志。
 - MVID 与审计值 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1` 一致 → 兼容模式为 **`certified`**。
 - MVID 不一致（游戏更新或不同构建）→ 兼容模式为 **`structural-validation`**。
-- 两种模式下**每一个补丁都会被尝试安装**，由补丁自身的结构/IL 验证独立决定去留。局部游戏更新只会使相关补丁各自 fail-closed，不再让整个模组失效。
+- 两种模式下每个补丁仍独立报告；`Structural` 补丁执行自身验证，`Fingerprint`/`StrictIl` 补丁在未知 MVID 上以 `SkippedUncertifiedBuild` 安全跳过。局部游戏更新只会使相关补丁各自 fail-closed，不再让整个模组失效。
 
 每个补丁声明一个 `CompatibilityLevel`（严格度递增）：
 
 | 等级 | 含义 | 本项目的典型形态 |
 |---|---|---|
 | `Structural` | 结构自检通过即可运行，仅依赖 `Initialize` 校验的成员形状 | 简单 FieldRef / null guard（仅 `RunBasedValues`） |
-| `Fingerprint` | 结构自检 + 行为指纹；用于完整替换式 Prefix（返回 `bool` 可跳过原方法） | 大多数完整替换/守卫 Prefix |
-| `StrictIl` | 需要唯一 IL 匹配、标签/异常块安全与生成后校验 | Transpiler 与网络面（Photon 所有权/RPC 语义）改写 |
+| `Fingerprint` | 当前为结构自检 + 审计 MVID；补齐方法级行为指纹后才可放开未知构建 | 大多数完整替换/守卫 Prefix |
+| `StrictIl` | 当前为审计 MVID + 唯一 IL 匹配、标签/异常块安全与生成后校验 | Transpiler 与网络面（Photon 所有权/RPC 语义）改写 |
 
 补丁失败时单独跳过并分类（不连坐）：
 
 - `SkippedStructureMismatch`：`Initialize` 结构校验（成员缺失/变形）拒绝当前构建。
 - `SkippedIlMismatch`：IL 匹配或 IL 生成拒绝当前构建。
+- `SkippedUncertifiedBuild`：补丁尚未具备方法级行为指纹，当前 MVID 未认证。
 - `FailedInitialize` / `FailedPatch`：真正的初始化或安装故障。
 - 其余见 `SkippedDisabled`（配置关闭）、`SkippedNoDefinition`（保留键未注册）等。
 
@@ -98,7 +99,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.WeightRefreshCoalescing` | `true` | StrictIl | Prefix：`CharacterItems.RefreshAllCharacterCarryWeightRPC()` | 同帧**内容签名**合并：仅当折叠签名未变时跳过同帧重复全员负重刷新。目标即 RPC 入口，网络面升级 StrictIl。 |
 | `Experimental.SleepingZombieScan` | `true` | Fingerprint | Prefix：`MushroomZombie.DoSleeping()` | 距离平方化并把 `Vector3.Angle` 延后到距离判定通过后。私有方法用 `AccessTools.MethodDelegate` 绑定。 |
 | `Experimental.ItemScaleRedundantWrite` | `true` | StrictIl | Prefix：`ItemScaleSyncer.Update()` | 缩放输入、目标 transform 身份、当前 localScale 全部未变时跳过原方法。owner 缩放变化（可能发 RPC）必定放行，网络面升级 StrictIl。 |
-| `Experimental.RemoteItemInterpolationThreshold` | `true` | StrictIl | Prefix：`ItemPhysicsSyncer.FixedUpdate()` | 远端 Ground 物品已静止时跳过两次 Rigidbody 移动；不触碰发包/kinematic。替换远端插值，网络面升级 StrictIl。 |
+| `Experimental.RemoteItemInterpolationThreshold` | `true` | StrictIl | Prefix：`ItemPhysicsSyncer.FixedUpdate()` | 远端 Ground 物品已精确到达插值目标时跳过两次无效 Rigidbody 移动；不触碰发包/kinematic。 |
 | `Experimental.EyeLookComponentCache` | `true` | Fingerprint | Prefix（完整替换）：`PlayerEyeLook.Update()` | 逐行复刻原方法，仅把循环内每帧 `GetComponent<AnimatedMouth>` 改为按 Character 缓存。 |
 | `Experimental.ExplosionScale` | `true` | Fingerprint | Prefix：`ExplosionEffect.GetPoints()` | 爆炸球数量自适应削减。原版 13 球；默认近距单发 7 球，邻近集群达到 2 / 5 发时继续降为 5 / 2 球，50–120 米降为 2 球，120 米外仅保留中心球。只减不增、不为负。 |
 
@@ -122,9 +123,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.RemoteRagdollLodPhysics` | `true` | Fingerprint | Prefix：`CharacterRagdoll.FixedUpdate()` | 仅对 60 米外、已预热且无交互的远端玩家跳过动画图、IK 与姿态采样；50 米内恢复。近距聚集场景不触发。 |
 | `Experimental.RemoteRagdollLodAnimate` | `true` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 与同一远距判定共享状态，跳过关节动画驱动；Gravity、Drag、ToggleUseGravity、ApplyForces 保持运行。 |
 | `Experimental.RemoteRagdollLodMovementForce` | `true` | Fingerprint | Prefix：`Bodypart.AddMovementForce(Vector3)` | 远距被动 ragdoll 不再加入本地动画移动力；网络位置与碰撞路径不变。 |
-| `Experimental.RemoteRagdollLodAnimator` | `true` | Fingerprint | Prefix：`CharacterAnimations.Update()` | 远距被动 ragdoll 跳过 Animator 参数写入；本地、bot、观战、抓取、攀爬、死亡、装备窗口等均回退原版。 |
+| `Experimental.RemoteRagdollLodAnimator` | `true` | Fingerprint | Prefix：`CharacterAnimations.Update()` | 远距被动 ragdoll 跳过大部分 Animator 参数写入，但保留投掷/表情计时、表情退出、水状态复位和辅助位置更新；本地、bot、观战、抓取、攀爬、死亡、装备窗口等均回退原版。 |
 | `Experimental.JointProjection` | `true` | Fingerprint | Postfix：`RigCreator.SpawnJoint(...)` | 将运行时新建 joint 的 projection 从 PositionAndRotation 改为 PositionOnly。审计构建中该方法没有正常运行时调用者，预期通常不触发且可能无收益。 |
-| `Experimental.DetailBodypartThrottle` | `true` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 非本地、非交互玩家的 59 个手指/jiggle/脚趾/嘴颌部件默认每 3 个渲染帧驱动一次，并按部件错峰。近距聚集时仍生效，是当前直接削减该场景托管物理工作的主要补丁。 |
+| `Experimental.DetailBodypartThrottle` | `true` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 非本地、非交互玩家的 59 个手指/jiggle/脚趾/嘴颌部件默认每 3 个物理 tick 驱动一次，并按部件错峰。近距聚集时仍生效，是当前直接削减该场景托管物理工作的主要补丁。 |
 
 爆炸相关说明：`Dynamite.RPC_Explode` 每次实例化 `explosionPrefab`（含 `ExplosionEffect`），原版 `GetPoints` 生成 `1 + 4 + 2*4 = 13` 个爆炸球，每个球再实例化 orb 并做 Animator/MeshRenderer/MaterialPropertyBlock 处理，多人同时投掷时放大。`ExplosionScale` 使用 16 项预分配环形缓冲记录邻近爆炸，整个判定零分配；它只削减球数。球内 `new MaterialPropertyBlock()` 的复用**未实现**——该分配位于 `Start()` 内嵌套的 `IExplode` 局部函数（编译器生成方法）里，属于多模组环境下已证明不可靠的目标形态，故不做。全局 `Shader.WarmupAllShaders()` 实现已因主线程冻结事故彻底删除。
 
@@ -138,7 +139,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - `RagdollPhysicsMats` 签名纳入每个 Bodypart 全部 collider 材质 ID（不再是只取首个）。
 - `ExplosionScale` 对负 prefab count 做保护。
 - `EyeLook` 依赖验证前移、`eyeRenderers == null` 保持原 NRE 行为。
-- 所有 35 个补丁补齐 `Reset` 并接线（卸载后清理静态/缓存状态）。
+- 所有 35 个补丁补齐 `Reset` 并由安装器统一管理（卸载后清理静态/缓存状态）。
 
 ## 保留配置键但未注册的项
 
@@ -179,7 +180,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.ExplosionFarDistance` | `120` | 从该距离开始仅保留中心球。 |
 | `Experimental.RemoteRagdollLodEnterDistance` | `60` | 远端角色进入被动 ragdoll 层级的距离。 |
 | `Experimental.RemoteRagdollLodExitDistance` | `50` | 远端角色恢复完整行为的距离。 |
-| `Experimental.DetailBodypartThrottleInterval` | `3` | 远端细节部件每 N 个渲染帧执行一次 Animate；1 为不降频，运行时最大钳制到 10。 |
+| `Experimental.DetailBodypartThrottleInterval` | `3` | 远端细节部件每 N 个物理 tick 执行一次 Animate；1 为不降频，运行时最大钳制到 10。 |
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
 
@@ -191,7 +192,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - 诊断开关和数值型配置（爆炸、远距 LOD、细节部件间隔）由运行时代码读取 `.Value`，修改后即时生效，无需 Harmony install/uninstall。
 - 热切换在日志输出 `HotReload:` 一行，例如 `HotReload: <名称> enabled→installed` / `disabled→uninstalled`，失败或跳过则带 `Skipped*`/`Failed*` 与原因。每项切换独立隔离，失败只影响该项。
 - 未注册键改为 `true` 时输出 `HotReload: <名称> enabled→SkippedNoDefinition: no definition registered`，不安装任何补丁。
-- **风险提示**：唯一 Transpiler（`Fixes.BreakableBridge`）热切换风险最高——卸载/重装需要 Harmony 反向应用并重新编译 IL。若切换后出现异常或 `UnpatchSelf` 报错，应重启游戏确认，不要在运行中反复切换。
+- **风险提示**：唯一 Transpiler（`Fixes.BreakableBridge`）热切换风险最高——卸载/重装需要 Harmony 反向应用并重新编译 IL。若切换后出现异常或 `verified uninstall failed`，应重启游戏确认，不要在运行中反复切换。
 
 ## 构建与安装
 

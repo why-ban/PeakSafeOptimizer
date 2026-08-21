@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
 using BepInEx;
 using BepInEx.Configuration;
@@ -21,6 +22,7 @@ namespace PeakSafeOptimizer
         private OptimizerConfig _settings;
         private PatchInstaller _installer;
         private int _mainThreadId;
+        private readonly ConcurrentQueue<PatchId> _pendingSettingChanges = new ConcurrentQueue<PatchId>();
 
         private void Awake()
         {
@@ -71,73 +73,80 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Startup rollback: unsubscribe SettingChanged failed safely: {ex.GetType().Name}: {ex.Message}");
             }
 
-            try
+            bool fullyUninstalled = UninstallAll("Startup rollback");
+            if (fullyUninstalled)
             {
-                _harmony?.UnpatchSelf();
+                DisposeLifecycle("Startup rollback");
+                _lifecycle = null;
+                _harmony = null;
+                _installer = null;
+                _settings = null;
+                Logger.LogWarning("PeakSafeOptimizer | startup rolled back: all known patches were removed.");
             }
-            catch (Exception ex)
+            else
             {
-                Logger.LogError($"Startup rollback: UnpatchSelf failed safely: {ex.GetType().Name}: {ex.Message}");
+                Logger.LogError(
+                    "PeakSafeOptimizer | startup rollback left one or more patches attached; " +
+                    "their state was retained rather than reset underneath live Harmony methods.");
             }
-
-            try
-            {
-                _lifecycle?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"Startup rollback: lifecycle dispose failed safely: {ex.GetType().Name}: {ex.Message}");
-            }
-
-            _lifecycle = null;
-            _harmony = null;
-            _installer = null;
-            _settings = null;
-            Logger.LogWarning("PeakSafeOptimizer | startup rolled back: no patch from this plugin is installed.");
         }
 
         private void OnSettingChanged(object sender, SettingChangedEventArgs args)
         {
             try
             {
-                // ConfigurationManager fires this on the Unity main thread; if it ever arrives
-                // elsewhere, ignore it defensively rather than mutating Harmony state off-thread.
-                if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
-                {
-                    Logger.LogWarning("PeakSafeOptimizer setting change ignored: not on the main thread.");
-                    return;
-                }
                 if (args?.ChangedSetting == null)
                     return;
                 if (_settings == null || !_settings.TryGetPatchId(args.ChangedSetting, out PatchId id))
                     return; // Value-typed entries already take effect at runtime; nothing to do.
 
-                bool enabled = _settings.IsEnabled(id);
-                PatchStatus status = _installer.Toggle(id, enabled);
-                PatchStatusEntry entry = status.Entries.Count > 0 ? status.Entries[0] : null;
-                if (entry == null)
-                    return;
-
-                switch (entry.Outcome)
+                // ConfigEntry.Value changes before BepInEx raises SettingChanged. Queue background
+                // writes instead of letting the visible setting and installed Harmony state diverge.
+                if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
                 {
-                    case PatchOutcome.Applied:
-                        Logger.LogInfo(enabled
-                            ? $"HotReload: {id} enabled→installed"
-                            : $"HotReload: {id} disabled→uninstalled");
-                        break;
-                    case PatchOutcome.Skipped:
-                        Logger.LogInfo(enabled
-                            ? $"HotReload: {id} enabled→{entry.Result}: {entry.Reason}"
-                            : $"HotReload: {id} disabled→{entry.Result}: {entry.Reason}");
-                        break;
-                    case PatchOutcome.Failed:
-                        Logger.LogError($"HotReload: {id} {entry.Result}: {entry.Reason}");
-                        break;
+                    _pendingSettingChanges.Enqueue(id);
+                    return;
                 }
+
+                ApplySettingChange(id);
             }
             catch (Exception ex)
             {
                 Logger.LogError($"HotReload failed safely: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private void Update()
+        {
+            while (_pendingSettingChanges.TryDequeue(out PatchId id))
+                ApplySettingChange(id);
+        }
+
+        private void ApplySettingChange(PatchId id)
+        {
+            if (_settings == null || _installer == null)
+                return;
+            bool enabled = _settings.IsEnabled(id);
+            PatchStatus status = _installer.Toggle(id, enabled);
+            PatchStatusEntry entry = status.Entries.Count > 0 ? status.Entries[0] : null;
+            if (entry == null)
+                return;
+
+            switch (entry.Outcome)
+            {
+                case PatchOutcome.Applied:
+                    Logger.LogInfo(enabled
+                        ? $"HotReload: {id} enabled→installed"
+                        : $"HotReload: {id} disabled→uninstalled");
+                    break;
+                case PatchOutcome.Skipped:
+                    Logger.LogInfo(enabled
+                        ? $"HotReload: {id} enabled→{entry.Result}: {entry.Reason}"
+                        : $"HotReload: {id} disabled→{entry.Result}: {entry.Reason}");
+                    break;
+                case PatchOutcome.Failed:
+                    Logger.LogError($"HotReload: {id} {entry.Result}: {entry.Reason}");
+                    break;
             }
         }
 
@@ -152,21 +161,53 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Unsubscribe SettingChanged failed: {ex}");
             }
 
-            try
+            bool fullyUninstalled = UninstallAll("Shutdown");
+            if (fullyUninstalled)
             {
-                _harmony?.UnpatchSelf();
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"UnpatchSelf failed during shutdown: {ex}");
-            }
-            finally
-            {
-                _lifecycle?.Dispose();
+                DisposeLifecycle("Shutdown");
                 _lifecycle = null;
                 _harmony = null;
                 _installer = null;
                 _settings = null;
+            }
+            else
+            {
+                Logger.LogError(
+                    "PeakSafeOptimizer shutdown left one or more patches attached; state was retained " +
+                    "to keep those methods safe until process exit.");
+            }
+        }
+
+        private bool UninstallAll(string phase)
+        {
+            if (_installer == null)
+                return true;
+            try
+            {
+                PatchStatus status = _installer.UninstallAll();
+                foreach (PatchStatusEntry entry in status.Entries)
+                {
+                    if (entry.Outcome == PatchOutcome.Failed)
+                        Logger.LogError($"{phase}: {entry.Name} {entry.Result}: {entry.Reason}");
+                }
+                return !_installer.HasInstalledPatches;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"{phase}: verified uninstall failed safely: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void DisposeLifecycle(string phase)
+        {
+            try
+            {
+                _lifecycle?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"{phase}: lifecycle dispose failed safely: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }

@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(AnimatedMouthMaterialPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: AnimatedMouthMaterialPatch.Reset));
-            context.RegisterCleanup(AnimatedMouthMaterialPatch.Reset);
         }
     }
 }

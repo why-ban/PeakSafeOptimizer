@@ -108,7 +108,7 @@ namespace PeakSafeOptimizer.Config
         // RigCreator.SpawnJoint from JointProjectionMode.PositionAndRotation to PositionOnly. One
         // write per joint at creation time, no per-frame state.
         JointProjection,
-        // ScaleExperimental lane: runs Bodypart.Animate only every Nth rendered frame for
+        // ScaleExperimental lane: runs Bodypart.Animate only every Nth physics tick for
         // the detail bodyparts (fingers, jiggle bones, toes, mouth/jaw) of remote, fully controlled,
         // non-interacting player characters. Unlike the RemoteRagdollLod entries this has no distance
         // term, so it is the only lane that still reduces remote ragdoll cost when the whole lobby is
@@ -293,7 +293,7 @@ namespace PeakSafeOptimizer.Config
                 "Must be lower than RemoteRagdollLodEnterDistance; otherwise it is clamped at runtime.");
             DetailBodypartThrottleInterval = config.Bind("Experimental", "DetailBodypartThrottleInterval", 3,
                 "Animate for detail bodyparts (fingers / jiggle bones / toes / mouth and jaw) of " +
-                "remote characters runs once every N rendered frames; 1 = no throttling. Values " +
+                "remote characters runs once every N physics ticks; 1 = no throttling. Values " +
                 "above 10 are clamped to 10 at runtime.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");

@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(ItemAudioManagerHashPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: ItemAudioManagerHashPatch.Reset));
-            context.RegisterCleanup(ItemAudioManagerHashPatch.Reset);
         }
     }
 }

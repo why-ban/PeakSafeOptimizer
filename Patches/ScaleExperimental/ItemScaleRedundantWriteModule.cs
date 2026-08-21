@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     nameof(ItemScaleRedundantWritePatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: ItemScaleRedundantWritePatch.Reset));
-            context.RegisterCleanup(ItemScaleRedundantWritePatch.Reset);
         }
     }
 }

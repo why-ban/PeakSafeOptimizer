@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using HarmonyLib;
 using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
 
@@ -30,10 +31,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// </summary>
     internal static class RemoteRagdollLodAnimatePatch
     {
+        private static bool _acquired;
+
         internal static void Initialize()
         {
             ResolveAndValidateTarget();
             RemoteRagdollLod.Acquire();
+            _acquired = true;
         }
 
         internal static MethodInfo ResolveAndValidateTarget()
@@ -48,9 +52,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
         internal static void Reset()
         {
+            if (!_acquired)
+                return;
+            _acquired = false;
             RemoteRagdollLod.Release();
         }
 
+        [HarmonyPriority(Priority.High)]
         internal static bool Prefix(Bodypart __instance)
         {
             Character owner = RemoteRagdollLod.ResolveOwner(__instance);

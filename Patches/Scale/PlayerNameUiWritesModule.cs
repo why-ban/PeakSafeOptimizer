@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(PlayerNameUiWritesPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: PlayerNameUiWritesPatch.Reset));
-            context.RegisterCleanup(PlayerNameUiWritesPatch.Reset);
         }
     }
 }

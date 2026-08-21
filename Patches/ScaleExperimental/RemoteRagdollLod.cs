@@ -87,6 +87,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
         private static ConditionalWeakTable<Character, State> _states;
         private static AccessTools.FieldRef<Bodypart, Character> _bodypartCharacter;
+        private static AccessTools.FieldRef<CharacterData, Character> _grabbedPlayer;
+        private static AccessTools.FieldRef<CharacterData, Character> _grabbingPlayer;
         private static Func<CharacterData, UnityEngine.Object> _grabJoint;
         private static int _refCount;
 
@@ -104,17 +106,27 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Bodypart), "character", typeof(Character));
             FieldInfo grabJointField = ScaleValidation.RequireInstanceFieldByTypeName(
                 typeof(CharacterData), "grabJoint", FixedJointTypeName);
+            FieldInfo grabbedPlayerField = ScaleValidation.RequireInstanceField(
+                typeof(CharacterData), "grabbedPlayer", typeof(Character));
+            FieldInfo grabbingPlayerField = ScaleValidation.RequireInstanceField(
+                typeof(CharacterData), "grabbingPlayer", typeof(Character));
 
             AccessTools.FieldRef<Bodypart, Character> bodypartCharacter =
                 AccessTools.FieldRefAccess<Bodypart, Character>(bodypartCharacterField);
             Func<CharacterData, UnityEngine.Object> grabJoint =
                 ScaleEmit.CreateUnityObjectFieldGetter<CharacterData>(grabJointField);
-            if (bodypartCharacter == null || grabJoint == null)
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayer =
+                AccessTools.FieldRefAccess<CharacterData, Character>(grabbedPlayerField);
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayer =
+                AccessTools.FieldRefAccess<CharacterData, Character>(grabbingPlayerField);
+            if (bodypartCharacter == null || grabbedPlayer == null || grabbingPlayer == null || grabJoint == null)
                 throw new InvalidOperationException("RemoteRagdollLod accessor creation failed");
 
             if (_states == null)
                 _states = new ConditionalWeakTable<Character, State>();
             _bodypartCharacter = bodypartCharacter;
+            _grabbedPlayer = grabbedPlayer;
+            _grabbingPlayer = grabbingPlayer;
             _grabJoint = grabJoint;
             _refCount++;
         }
@@ -132,6 +144,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _refCount = 0;
             _states = null;
             _bodypartCharacter = null;
+            _grabbedPlayer = null;
+            _grabbingPlayer = null;
             _grabJoint = null;
         }
 
@@ -153,7 +167,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         {
             ConditionalWeakTable<Character, State> states = _states;
             Func<CharacterData, UnityEngine.Object> grabJoint = _grabJoint;
-            if (states == null || grabJoint == null)
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef = _grabbedPlayer;
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef = _grabbingPlayer;
+            if (states == null || grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
             {
                 RateLimitedDiagnostics.Hit("RemoteRagdollLod.accessors-unavailable");
                 return false;
@@ -161,9 +177,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (c == null)
                 return false;
 
-            // One evaluation per character per frame. Animate/AddMovementForce are called once per
-            // bodypart per physics step, so without this the fallback list would be re-evaluated
-            // dozens of times per character per frame.
+            // One evaluation per character per rendered frame. Animate/AddMovementForce are called
+            // from physics while CharacterAnimations.Update is rendered; sharing this decision
+            // avoids contradictory transitions between those call families.
             int frame = Time.frameCount;
             if (states.TryGetValue(c, out State cached) && cached.LastFrame == frame)
                 return cached.LastResult;
@@ -176,7 +192,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             State state = states.GetOrCreateValue(c);
             bool warmed = state.FullFrames >= WarmupFrames;
-            bool result = warmed && Evaluate(c, data, local, grabJoint, state.Tier);
+            bool result = warmed && Evaluate(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef, state.Tier);
             if (!warmed)
                 state.FullFrames++;
             // A fallback hit or a near distance both mean "full behaviour", so re-entry always has
@@ -196,6 +212,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             CharacterData data,
             Character local,
             Func<CharacterData, UnityEngine.Object> grabJoint,
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef,
             int tier)
         {
             // Fallback list. Any hit means "never downgrade"; the character keeps full vanilla
@@ -215,11 +233,15 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
             if (data.carrier != null || data.carriedPlayer != null)
                 return false;
+            if (data.isCarried || grabbedPlayerRef(data) != null || grabbingPlayerRef(data) != null)
+                return false;
             if (data.dead || data.fullyPassedOut)
                 return false;
             if (grabJoint(data) != null)
                 return false;
             if (data.isClimbing || data.isRopeClimbing || data.isVineClimbing)
+                return false;
+            if (data.currentClimbHandle != null || data.isReaching || data.isKicking)
                 return false;
             if (data.isKinecmatic)
                 return false;
@@ -316,6 +338,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "carrier", typeof(Character));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "carriedPlayer", typeof(Character));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbedPlayer", typeof(Character));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbingPlayer", typeof(Character));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isCarried", typeof(bool));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "currentClimbHandle", typeof(ClimbHandle));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isReaching", typeof(bool));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isKicking", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "fullyPassedOut", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isClimbing", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isRopeClimbing", typeof(bool));

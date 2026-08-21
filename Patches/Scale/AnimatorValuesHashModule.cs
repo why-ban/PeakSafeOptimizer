@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(AnimatorValuesHashPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: AnimatorValuesHashPatch.Reset));
-            context.RegisterCleanup(AnimatorValuesHashPatch.Reset);
         }
     }
 }

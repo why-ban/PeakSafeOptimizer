@@ -116,6 +116,8 @@ namespace PeakSafeOptimizer.Patches.Scale
             Vector3 origin = self.Center;
             float farSqr = 100f * 100f;
             float nearSqr = nearThreshold * nearThreshold;
+            if (!(nearSqr > 0f) || float.IsInfinity(nearSqr))
+                return true;
             bool near = false;
             bool far = false;
 

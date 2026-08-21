@@ -79,6 +79,12 @@ namespace PeakSafeOptimizer.Patches.Scale
             Vector3 origin = selfTransform.position;
             bool infiniteRange = float.IsPositiveInfinity(range);
             float rangeSqr = range * range;
+            if (!infiniteRange && range > 0f && (!(rangeSqr > 0f) || float.IsInfinity(rangeSqr)))
+            {
+                // Squaring subnormal/huge finite ranges underflows or overflows and no longer
+                // preserves the strict Vector3.Distance boundary.
+                return true;
+            }
 
             for (int i = 0; i < all.Count; i++)
             {

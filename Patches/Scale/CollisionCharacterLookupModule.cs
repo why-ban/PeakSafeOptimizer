@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(CollisionCharacterLookupPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: CollisionCharacterLookupPatch.Reset));
-            context.RegisterCleanup(CollisionCharacterLookupPatch.Reset);
         }
     }
 }

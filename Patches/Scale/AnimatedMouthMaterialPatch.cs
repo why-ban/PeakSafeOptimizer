@@ -273,18 +273,25 @@ namespace PeakSafeOptimizer.Patches.Scale
             __instance.isSpeaking = speaking;
 
             State st = state.GetValue(__instance, _ => new State());
-            if (st.LastUseTalkSprites != useTalkSprites)
+            Material material = mouthRenderer.material;
+            // MushroomZombie.UpdateMouth and other mods may write the same material between calls.
+            // The cache is therefore only a fast history hint; the actual material remains the
+            // source of truth before an idempotent write is skipped.
+            if (st.LastUseTalkSprites != useTalkSprites ||
+                material.GetInt("_UseTalkSprites") != useTalkSprites)
             {
-                mouthRenderer.material.SetInt("_UseTalkSprites", useTalkSprites);
+                material.SetInt("_UseTalkSprites", useTalkSprites);
                 st.LastUseTalkSprites = useTalkSprites;
             }
 
             // AnimatedMouth.cs:169-170
             int amplitudeIndex = (int)(__instance.NormalizedAmplitude * (float)(mouthTextures.Length - 1));
             __instance.amplitudeIndex = amplitudeIndex;
-            if (st.LastAmplitudeIndex != amplitudeIndex)
+            Texture2D targetTexture = mouthTextures[amplitudeIndex];
+            if (st.LastAmplitudeIndex != amplitudeIndex ||
+                material.GetTexture("_TalkSprite") != targetTexture)
             {
-                mouthRenderer.material.SetTexture("_TalkSprite", mouthTextures[amplitudeIndex]);
+                material.SetTexture("_TalkSprite", targetTexture);
                 st.LastAmplitudeIndex = amplitudeIndex;
             }
 

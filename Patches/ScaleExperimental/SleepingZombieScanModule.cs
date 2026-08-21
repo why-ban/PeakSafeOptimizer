@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     nameof(SleepingZombieScanPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: SleepingZombieScanPatch.Reset));
-            context.RegisterCleanup(SleepingZombieScanPatch.Reset);
         }
     }
 }

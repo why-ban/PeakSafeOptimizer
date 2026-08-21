@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     nameof(RemoteItemInterpolationThresholdPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: RemoteItemInterpolationThresholdPatch.Reset));
-            context.RegisterCleanup(RemoteItemInterpolationThresholdPatch.Reset);
         }
     }
 }

@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     nameof(EyeLookComponentCachePatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: EyeLookComponentCachePatch.Reset));
-            context.RegisterCleanup(EyeLookComponentCachePatch.Reset);
         }
     }
 }

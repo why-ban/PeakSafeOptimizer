@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(ZombieSpawnScanPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: ZombieSpawnScanPatch.Reset));
-            context.RegisterCleanup(ZombieSpawnScanPatch.Reset);
         }
     }
 }

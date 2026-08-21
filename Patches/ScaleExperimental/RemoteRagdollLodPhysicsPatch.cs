@@ -12,7 +12,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///
     /// What is skipped: SetPhysicsMats, RotateCharacter, the IK rig SyncLayers/Evaluate, the
     /// animator PlayableGraph.Evaluate, ConfigureIK, per-part SaveAnimationData,
-    /// SaveAdditionalTransformPositions, ResetRotation and per-part ResetTransform. This is the
+    /// ResetRotation and per-part ResetTransform. SaveAdditionalTransformPositions is still called
+    /// by this Prefix because CharacterMovement.FixedUpdate reads its height outputs for every
+    /// character. This is the
     /// single most expensive per-character physics-step cost in the game and it is purely
     /// animation-pose work: none of it applies a force, and none of it moves a Rigidbody. The
     /// visible effect is that the distant character stops playing its animation pose and hangs in
@@ -24,11 +26,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// converging and forcesToAdd keeps being flushed. Collider state, kinematic state and the
     /// CharacterSyncer network interpolation are not involved at all.
     ///
-    /// One consequence is intentional: with FixedUpdate skipped, this character's
-    /// data.targetHeadHeight / data.targetHipHeight (written by SaveAdditionalTransformPositions)
-    /// stop updating. Both are only consumed by the owning client's own stand/ground logic
-    /// (CharacterMovement.cs:692-694 and :877), which does not run for a remote character here,
-    /// so no local decision reads a stale value.
+    /// The target head/hip heights therefore continue to follow the current remote ragdoll pose,
+    /// while the expensive animation graph and per-part pose reset remain skipped.
     ///
     /// Likewise SetPhysicsMats stops re-asserting the collider friction material while downgraded.
     /// That is safe because the material selection is driven by currentRagdollControll
@@ -39,6 +38,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     internal static class RemoteRagdollLodPhysicsPatch
     {
         private static AccessTools.FieldRef<CharacterRagdoll, Character> _character;
+        private static Action<CharacterRagdoll> _setPhysicsMats;
+        private static Action<CharacterRagdoll> _saveAdditionalTransformPositions;
+        private static bool _acquired;
 
         internal static void Initialize()
         {
@@ -46,15 +48,29 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             FieldInfo characterField = ScaleValidation.RequireInstanceField(
                 typeof(CharacterRagdoll), "character", typeof(Character));
+            MethodInfo saveAdditionalTransformPositions = ScaleValidation.RequireInstanceMethod(
+                typeof(CharacterRagdoll), "SaveAdditionalTransformPositions", typeof(void),
+                Type.EmptyTypes, requirePublic: false);
+            MethodInfo setPhysicsMats = ScaleValidation.RequireInstanceMethod(
+                typeof(CharacterRagdoll), "SetPhysicsMats", typeof(void), Type.EmptyTypes, requirePublic: false);
             AccessTools.FieldRef<CharacterRagdoll, Character> character =
                 AccessTools.FieldRefAccess<CharacterRagdoll, Character>(characterField);
+            Action<CharacterRagdoll> saveAdditional =
+                ScaleExperimentalEmit.CreateDelegate<Action<CharacterRagdoll>>(saveAdditionalTransformPositions);
+            Action<CharacterRagdoll> setPhysics =
+                ScaleExperimentalEmit.CreateDelegate<Action<CharacterRagdoll>>(setPhysicsMats);
             if (character == null)
                 throw new InvalidOperationException("RemoteRagdollLodPhysics FieldRef creation failed");
+            if (saveAdditional == null || setPhysics == null)
+                throw new InvalidOperationException("RemoteRagdollLodPhysics height accessor creation failed");
 
             // Acquired last: everything that can still throw has already run, so a failed
             // Initialize never leaves a reference behind on the shared helper.
             RemoteRagdollLod.Acquire();
+            _acquired = true;
             _character = character;
+            _setPhysicsMats = setPhysics;
+            _saveAdditionalTransformPositions = saveAdditional;
         }
 
         internal static MethodInfo ResolveAndValidateTarget()
@@ -66,7 +82,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         internal static void Reset()
         {
             _character = null;
-            RemoteRagdollLod.Release();
+            _setPhysicsMats = null;
+            _saveAdditionalTransformPositions = null;
+            if (_acquired)
+            {
+                _acquired = false;
+                RemoteRagdollLod.Release();
+            }
         }
 
         internal static bool Prefix(CharacterRagdoll __instance)
@@ -84,7 +106,26 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 RateLimitedDiagnostics.Hit("RemoteRagdollLodPhysics.character-null");
                 return true;
             }
-            return !RemoteRagdollLod.ShouldDowngrade(owner);
+            if (!RemoteRagdollLod.ShouldDowngrade(owner))
+                return true;
+
+            // CharacterMovement.FixedUpdate still reads targetHeadHeight and targetHipHeight for
+            // every character. Keep the original producer running while leaving the expensive IK,
+            // graph evaluation and per-part pose reset skipped.
+            Action<CharacterRagdoll> saveAdditional = _saveAdditionalTransformPositions;
+            if (saveAdditional == null)
+                return true;
+            try
+            {
+                _setPhysicsMats(__instance);
+                saveAdditional(__instance);
+                return false;
+            }
+            catch (Exception)
+            {
+                RateLimitedDiagnostics.Hit("RemoteRagdollLodPhysics.height-update-failed");
+                return true;
+            }
         }
     }
 }

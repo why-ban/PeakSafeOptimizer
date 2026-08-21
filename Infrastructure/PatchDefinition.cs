@@ -8,9 +8,9 @@ namespace PeakSafeOptimizer.Infrastructure
     /// <summary>
     /// How much of its own validation a patch must pass before it may be installed.
     ///
-    /// This replaces the old global MVID gate. The MVID is now a diagnostic and a risk hint only;
-    /// every patch decides for itself whether the current game build still matches what it was
-    /// audited against, so a game update can only disable the patches whose own checks fail.
+    /// Structural patches can independently validate an unknown build. Patches that replace audited
+    /// behavior additionally require the audited build MVID until they have a dedicated method-level
+    /// behavioral fingerprint. This is per patch, never a global all-or-nothing gate.
     ///
     /// Ordered by strictness: Structural &lt; Fingerprint &lt; StrictIl.
     /// </summary>
@@ -24,17 +24,16 @@ namespace PeakSafeOptimizer.Infrastructure
         Structural,
 
         /// <summary>
-        /// Structural validation plus a behavioural fingerprint. Used by full-replacement Prefixes
+        /// Structural validation plus a certified audited build. Used by full-replacement Prefixes
         /// (Prefix returns bool and can skip the original), where matching member shapes are not by
         /// themselves proof that the replacement is still equivalent.
         /// </summary>
         Fingerprint,
 
         /// <summary>
-        /// Requires a unique IL match, label/exception-block safety and post-generation validation.
-        /// Used by Transpilers and network-facing rewrites. These patches fail closed by themselves
-        /// on an unexpected build, which is exactly why they may still be attempted on an
-        /// uncertified MVID.
+        /// Requires the certified build plus a unique IL match, label/exception-block safety and
+        /// post-generation validation where the patch supplies an IL matcher. Used by Transpilers
+        /// and network-facing rewrites.
         /// </summary>
         StrictIl
     }
@@ -42,8 +41,8 @@ namespace PeakSafeOptimizer.Infrastructure
     public sealed class PatchDefinition
     {
         /// <summary>
-        /// Backwards-compatible overload kept for the existing patch modules. <c>requireCurrentMvid</c>
-        /// no longer gates anything; it is only used to infer a <see cref="CompatibilityLevel"/>:
+        /// Backwards-compatible overload kept for existing patch modules. <c>requireCurrentMvid</c>
+        /// is a per-patch audited-build requirement and also infers a <see cref="CompatibilityLevel"/>:
         /// a Transpiler maps to <see cref="CompatibilityLevel.StrictIl"/>, a legacy
         /// <c>requireCurrentMvid: true</c> (always a full-replacement Prefix in this codebase) maps to
         /// <see cref="CompatibilityLevel.Fingerprint"/>, everything else to
@@ -68,7 +67,8 @@ namespace PeakSafeOptimizer.Infrastructure
                 postfix,
                 transpiler,
                 finalizer,
-                reset)
+                reset,
+                requireCurrentMvid)
         {
         }
 
@@ -87,7 +87,8 @@ namespace PeakSafeOptimizer.Infrastructure
             Func<HarmonyMethod> postfix = null,
             Func<HarmonyMethod> transpiler = null,
             Func<HarmonyMethod> finalizer = null,
-            Action reset = null)
+            Action reset = null,
+            bool requiresCertifiedBuild = false)
         {
             Id = id;
             Initialize = initialize ?? (() => { });
@@ -98,6 +99,7 @@ namespace PeakSafeOptimizer.Infrastructure
             Finalizer = finalizer;
             Compatibility = compatibility;
             Reset = reset;
+            RequiresCertifiedBuild = requiresCertifiedBuild;
         }
 
         public PatchId Id { get; }
@@ -108,8 +110,14 @@ namespace PeakSafeOptimizer.Infrastructure
         public Func<HarmonyMethod> Transpiler { get; }
         public Func<HarmonyMethod> Finalizer { get; }
 
-        /// <summary>Diagnostic/risk classification; never a reason to skip installation by itself.</summary>
+        /// <summary>Declared validation/risk classification shown in status reporting.</summary>
         public CompatibilityLevel Compatibility { get; }
+
+        /// <summary>
+        /// True when this patch replaces audited behavior and lacks an independent behavioral
+        /// fingerprint suitable for an unknown game build.
+        /// </summary>
+        public bool RequiresCertifiedBuild { get; }
 
         /// <summary>
         /// Optional cleanup for the patch's cached accessors. Called by the installer after a fully

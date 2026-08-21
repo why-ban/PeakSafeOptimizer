@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(CampfireProtectionMergePatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: CampfireProtectionMergePatch.Reset));
-            context.RegisterCleanup(CampfireProtectionMergePatch.Reset);
         }
     }
 }

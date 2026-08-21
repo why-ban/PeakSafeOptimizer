@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Stability
                     nameof(IKItemGuardPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: IKItemGuardPatch.Reset));
-            context.RegisterCleanup(IKItemGuardPatch.Reset);
         }
     }
 }

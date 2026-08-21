@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Stability
                     nameof(BugleClipGuardPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: BugleClipGuardPatch.Reset));
-            context.RegisterCleanup(BugleClipGuardPatch.Reset);
         }
     }
 }

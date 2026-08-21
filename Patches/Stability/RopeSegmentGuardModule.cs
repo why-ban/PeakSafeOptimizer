@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Stability
                     nameof(RopeSegmentGuardPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: RopeSegmentGuardPatch.Reset));
-            context.RegisterCleanup(RopeSegmentGuardPatch.Reset);
         }
     }
 }

@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     nameof(WeightRefreshCoalescingPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: WeightRefreshCoalescingPatch.Reset));
-            context.RegisterCleanup(WeightRefreshCoalescingPatch.Reset);
         }
     }
 }

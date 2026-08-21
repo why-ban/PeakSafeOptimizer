@@ -49,6 +49,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceField(typeof(Character), "refs", typeof(Character.CharacterRefs));
             ScaleValidation.RequireInstanceField(
                 typeof(Character.CharacterRefs), "afflictions", typeof(CharacterAfflictions));
+            ScaleValidation.RequireInstanceField(
+                typeof(CharacterAfflictions), "physicalThorns", typeof(List<ThornOnMe>));
+            ScaleValidation.RequireInstanceField(typeof(ThornOnMe), "stuckIn", typeof(bool));
+            ScaleValidation.RequireInstanceField(typeof(ThornOnMe), "type", typeof(int));
+            ScaleValidation.RequireInstanceMethod(
+                typeof(ThornOnMe), "GetThornDamage", typeof(int), Type.EmptyTypes, true);
 
             // Proof that the per-character work is unchanged; never invoked from here.
             ScaleValidation.RequireInstanceMethod(
@@ -251,6 +257,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 }
 
                 hash = unchecked(hash * 31 + (data.isSkeleton ? 1 : 0));
+
+                CharacterAfflictions afflictions = character.refs != null ? character.refs.afflictions : null;
+                if (afflictions == null || afflictions.physicalThorns == null)
+                    return false;
+                List<ThornOnMe> thorns = afflictions.physicalThorns;
+                hash = unchecked(hash * 31 + thorns.Count);
+                for (int t = 0; t < thorns.Count; t++)
+                {
+                    ThornOnMe thorn = thorns[t];
+                    if (thorn == null)
+                        return false;
+                    hash = unchecked(hash * 31 + (thorn.stuckIn ? 1 : 0));
+                    hash = unchecked(hash * 31 + thorn.type);
+                    hash = unchecked(hash * 31 + thorn.GetThornDamage());
+                }
             }
 
             signature = hash;

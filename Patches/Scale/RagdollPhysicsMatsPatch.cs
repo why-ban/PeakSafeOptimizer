@@ -46,9 +46,9 @@ namespace PeakSafeOptimizer.Patches.Scale
             internal int LastForcedFrame;
             internal float LastForcedTime;
 
-            // Signature we allowed the original to write last call, not yet confirmed as applied.
-            // It is promoted to the applied signature only when a later call proves the previous
-            // original call has returned.
+            // Signature allowed through by Prefix and confirmed only by Postfix. Harmony does not
+            // run the Postfix when the original throws, so a partial material write is never cached
+            // as complete.
             internal bool HasPending;
             internal int PendingFrictionType;
             internal int PendingPartCount;
@@ -230,21 +230,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             int frame = Time.frameCount;
             float now = Time.time;
 
-            // Promote the previously allowed signature only now that a later call proves the last
-            // original invocation returned (it can only be reached again after the previous call
-            // completed). This prevents marking a signature applied before the original actually
-            // wrote it, which would be wrong if that invocation threw.
-            if (state.HasPending)
-            {
-                state.HasApplied = true;
-                state.FrictionType = state.PendingFrictionType;
-                state.PartCount = state.PendingPartCount;
-                state.ColliderSignature = state.PendingColliderSignature;
-                state.SlipperyMatId = state.PendingSlipperyMatId;
-                state.NormalMatId = state.PendingNormalMatId;
-                state.HasPending = false;
-            }
-
             bool forceRefresh = !state.HasApplied ||
                 frame - state.LastForcedFrame >= ForceRefreshFrameInterval ||
                 frame < state.LastForcedFrame ||
@@ -262,8 +247,8 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return false;
             }
 
-            // Record the inputs we are about to let the original write as pending; they are promoted
-            // to applied only on the next call, after the original has run to completion.
+            // Record the inputs we are about to let the original write as pending. Postfix promotes
+            // them only after that exact invocation returns normally.
             state.PendingFrictionType = frictionType;
             state.PendingPartCount = partCount;
             state.PendingColliderSignature = colliderSignature;
@@ -273,6 +258,30 @@ namespace PeakSafeOptimizer.Patches.Scale
             state.LastForcedFrame = frame;
             state.LastForcedTime = now;
             return true;
+        }
+
+        internal static void Postfix(CharacterRagdoll __instance, bool __runOriginal)
+        {
+            ConditionalWeakTable<CharacterRagdoll, State> states = _states;
+            if (states == null || __instance == null ||
+                !states.TryGetValue(__instance, out State state) || !state.HasPending)
+            {
+                return;
+            }
+
+            if (!__runOriginal)
+            {
+                state.HasPending = false;
+                return;
+            }
+
+            state.HasApplied = true;
+            state.FrictionType = state.PendingFrictionType;
+            state.PartCount = state.PendingPartCount;
+            state.ColliderSignature = state.PendingColliderSignature;
+            state.SlipperyMatId = state.PendingSlipperyMatId;
+            state.NormalMatId = state.PendingNormalMatId;
+            state.HasPending = false;
         }
     }
 }

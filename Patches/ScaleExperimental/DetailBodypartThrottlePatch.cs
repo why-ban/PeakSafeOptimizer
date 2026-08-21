@@ -117,7 +117,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// </summary>
         private sealed class State
         {
-            internal int LastFrame = int.MinValue;
+            internal int LastPhysicsTick = int.MinValue;
             internal bool LastResult;
         }
 
@@ -128,6 +128,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private static bool[] _detailParts;
         private static AccessTools.FieldRef<Bodypart, BodypartType> _partType;
         private static AccessTools.FieldRef<Bodypart, Character> _bodypartCharacter;
+        private static AccessTools.FieldRef<CharacterData, Character> _grabbedPlayer;
+        private static AccessTools.FieldRef<CharacterData, Character> _grabbingPlayer;
         private static Func<CharacterData, UnityEngine.Object> _grabJoint;
         private static ConditionalWeakTable<Character, State> _states;
 
@@ -142,6 +144,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Bodypart), "character", typeof(Character));
             FieldInfo grabJointField = ScaleValidation.RequireInstanceFieldByTypeName(
                 typeof(CharacterData), "grabJoint", FixedJointTypeName);
+            FieldInfo grabbedPlayerField = ScaleValidation.RequireInstanceField(
+                typeof(CharacterData), "grabbedPlayer", typeof(Character));
+            FieldInfo grabbingPlayerField = ScaleValidation.RequireInstanceField(
+                typeof(CharacterData), "grabbingPlayer", typeof(Character));
 
             bool[] table = BuildDetailTable();
             AccessTools.FieldRef<Bodypart, BodypartType> partType =
@@ -150,12 +156,19 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 AccessTools.FieldRefAccess<Bodypart, Character>(bodypartCharacterField);
             Func<CharacterData, UnityEngine.Object> grabJoint =
                 ScaleEmit.CreateUnityObjectFieldGetter<CharacterData>(grabJointField);
-            if (partType == null || bodypartCharacter == null || grabJoint == null)
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayer =
+                AccessTools.FieldRefAccess<CharacterData, Character>(grabbedPlayerField);
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayer =
+                AccessTools.FieldRefAccess<CharacterData, Character>(grabbingPlayerField);
+            if (partType == null || bodypartCharacter == null || grabbedPlayer == null ||
+                grabbingPlayer == null || grabJoint == null)
                 throw new InvalidOperationException("DetailBodypartThrottle accessor creation failed");
 
             _states = new ConditionalWeakTable<Character, State>();
             _partType = partType;
             _bodypartCharacter = bodypartCharacter;
+            _grabbedPlayer = grabbedPlayer;
+            _grabbingPlayer = grabbingPlayer;
             _grabJoint = grabJoint;
             // Published last: the Prefix treats a null table as "run the original", so it stays a
             // no-op until every accessor above exists.
@@ -177,6 +190,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _detailParts = null;
             _partType = null;
             _bodypartCharacter = null;
+            _grabbedPlayer = null;
+            _grabbingPlayer = null;
             _grabJoint = null;
             _states = null;
         }
@@ -188,6 +203,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// non-detail part) is reachable on every single call, so a Hit would cost more than the work
         /// this patch removes. Initialize/Reset failures are already reported by the installer.
         /// </summary>
+        [HarmonyPriority(Priority.Low)]
         internal static bool Prefix(Bodypart __instance)
         {
             bool[] table = _detailParts;
@@ -208,14 +224,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // stable for the lifetime of the part; the modulo is taken before Math.Abs so
             // int.MinValue cannot overflow it.
             int phase = Math.Abs(__instance.GetInstanceID() % interval);
-            // Time.frameCount, not a physics-step counter: there is no per-physics-step anchor this
-            // patch could hook without adding exactly the kind of per-part work it is removing. The
-            // consequence is intentional - when FixedUpdate runs several physics steps inside one
-            // rendered frame, all of those steps share this decision, so the throttle is "every Nth
-            // rendered frame" rather than "every Nth physics step". That is the more stable of the
-            // two: the executed steps stay evenly spread over wall-clock time even while the physics
-            // step count per frame fluctuates.
-            if ((Time.frameCount + phase) % interval == 0)
+            // Use the physics tick rather than Time.frameCount. When Unity runs multiple physics
+            // steps inside one rendered frame, each step gets its own deterministic decision instead
+            // of creating consecutive runs and consecutive gaps.
+            int physicsTick = Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
+            if ((physicsTick + phase) % interval == 0)
                 return true;
 
             AccessTools.FieldRef<Bodypart, Character> characterRef = _bodypartCharacter;
@@ -246,18 +259,20 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         {
             ConditionalWeakTable<Character, State> states = _states;
             Func<CharacterData, UnityEngine.Object> grabJoint = _grabJoint;
-            if (states == null || grabJoint == null)
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef = _grabbedPlayer;
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef = _grabbingPlayer;
+            if (states == null || grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
                 return false;
 
-            int frame = Time.frameCount;
+            int physicsTick = Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
             bool hasState = states.TryGetValue(c, out State state);
-            if (hasState && state.LastFrame == frame)
+            if (hasState && state.LastPhysicsTick == physicsTick)
                 return state.LastResult;
 
-            bool result = Evaluate(c, grabJoint);
+            bool result = Evaluate(c, grabJoint, grabbedPlayerRef, grabbingPlayerRef);
             if (!hasState)
                 state = states.GetOrCreateValue(c);
-            state.LastFrame = frame;
+            state.LastPhysicsTick = physicsTick;
             state.LastResult = result;
             return result;
         }
@@ -267,7 +282,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// throttle": that character keeps full vanilla behaviour on every part. Ordered cheapest
         /// first. Every member read here is proven to exist by <see cref="ValidateStructure"/>.
         /// </summary>
-        private static bool Evaluate(Character c, Func<CharacterData, UnityEngine.Object> grabJoint)
+        private static bool Evaluate(
+            Character c,
+            Func<CharacterData, UnityEngine.Object> grabJoint,
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef)
         {
             CharacterData data = c.data;
             Character local = Character.localCharacter;
@@ -287,11 +306,15 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
             if (data.carrier != null || data.carriedPlayer != null)
                 return false;
+            if (data.isCarried || grabbedPlayerRef(data) != null || grabbingPlayerRef(data) != null)
+                return false;
             if (data.dead || data.fullyPassedOut)
                 return false;
             if (grabJoint(data) != null)
                 return false;
             if (data.isClimbing || data.isRopeClimbing || data.isVineClimbing)
+                return false;
+            if (data.currentClimbHandle != null || data.isReaching || data.isKicking)
                 return false;
             // The kinematic branch of Animate is SnapToAnim (Bodypart.cs:145-149), and
             // CharacterRagdoll.ToggleKinematic sets data.isKinecmatic together with every part's
@@ -378,6 +401,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "carrier", typeof(Character));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "carriedPlayer", typeof(Character));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbedPlayer", typeof(Character));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbingPlayer", typeof(Character));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isCarried", typeof(bool));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "currentClimbHandle", typeof(ClimbHandle));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isReaching", typeof(bool));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isKicking", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "fullyPassedOut", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isClimbing", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isRopeClimbing", typeof(bool));

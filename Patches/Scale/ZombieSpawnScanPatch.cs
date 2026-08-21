@@ -90,6 +90,8 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             Vector3 origin = __instance.transform.position;
             float thresholdSqr = threshold * threshold;
+            if (threshold > 0f && (!(thresholdSqr > 0f) || float.IsInfinity(thresholdSqr)))
+                return true;
             for (int i = 0; i < all.Count; i++)
             {
                 Character candidate = all[i];

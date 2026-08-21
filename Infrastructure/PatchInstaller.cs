@@ -74,6 +74,7 @@ namespace PeakSafeOptimizer.Infrastructure
         }
 
         public bool IsInstalled(PatchId id) => _installed.ContainsKey(id);
+        public bool HasInstalledPatches => _installed.Count != 0;
 
         /// <summary>
         /// Hot-reload entry point. Enabled=true installs (idempotent; reuses the same isolated
@@ -89,6 +90,20 @@ namespace PeakSafeOptimizer.Infrastructure
                 InstallOne(id, status);
             else
                 UninstallOne(id, status);
+            return status;
+        }
+
+        /// <summary>
+        /// Removes every patch known to this installer through the same per-method verification used
+        /// by hot reload. Failed removals intentionally remain recorded so their accessors cannot be
+        /// reset underneath a still-live Harmony method.
+        /// </summary>
+        public PatchStatus UninstallAll()
+        {
+            PatchStatus status = NewStatus();
+            var ids = new List<PatchId>(_installed.Keys);
+            for (int i = 0; i < ids.Count; i++)
+                UninstallOne(ids[i], status);
             return status;
         }
 
@@ -129,13 +144,21 @@ namespace PeakSafeOptimizer.Infrastructure
 
             CompatibilityLevel level = definition.Compatibility;
 
-            // The MVID is not consulted here on purpose. Each patch validates the running build for
-            // itself inside Initialize (member structure, unique IL match, self-tests) and inside
-            // Harmony's own IL generation, so a game update can only disable the patches that
-            // genuinely no longer match.
+            if (definition.RequiresCertifiedBuild && !(_fingerprint?.IsCurrent ?? false))
+            {
+                status.Add(new PatchStatusEntry(
+                    name,
+                    true,
+                    PatchResult.SkippedUncertifiedBuild,
+                    "requires the audited Assembly-CSharp MVID until a method-level behavioral fingerprint exists",
+                    level));
+                return;
+            }
+
             try { definition.Initialize(); }
             catch (Exception ex)
             {
+                ResetUninstalledDefinition(name, definition);
                 PatchResult initializeResult = ClassifyValidationFailure(ex, PatchResult.FailedInitialize);
                 if (initializeResult == PatchResult.FailedInitialize)
                     Fail(status, name, level, initializeResult, "Initialize", ex);
@@ -148,6 +171,7 @@ namespace PeakSafeOptimizer.Infrastructure
             try { target = definition.ResolveTarget() ?? throw new MissingMethodException("resolver returned null"); }
             catch (Exception ex)
             {
+                ResetUninstalledDefinition(name, definition);
                 PatchResult resolveResult = ClassifyValidationFailure(ex, PatchResult.FailedResolve);
                 if (resolveResult == PatchResult.FailedResolve)
                     Fail(status, name, level, resolveResult, "Resolve", ex);
@@ -164,7 +188,12 @@ namespace PeakSafeOptimizer.Infrastructure
                 if (prefix == null && postfix == null && transpiler == null && finalizer == null)
                     throw new InvalidOperationException("definition supplied no Harmony method");
             }
-            catch (Exception ex) { Fail(status, name, level, PatchResult.FailedHarmonyMethod, "HarmonyMethod", ex); return; }
+            catch (Exception ex)
+            {
+                ResetUninstalledDefinition(name, definition);
+                Fail(status, name, level, PatchResult.FailedHarmonyMethod, "HarmonyMethod", ex);
+                return;
+            }
 
             try { _harmony.Patch(target, prefix, postfix, transpiler, finalizer, null); }
             catch (Exception ex)
@@ -178,16 +207,24 @@ namespace PeakSafeOptimizer.Infrastructure
                     Reject(status, name, level, result, "Patch", ex);
                 else
                     Fail(status, name, level, result, "Patch", ex);
+
+                InstalledPatch partial = CreateInstalled(target, definition, prefix, postfix, transpiler, finalizer);
+                if (HasAttachedMethod(partial))
+                {
+                    _installed[id] = partial;
+                    _log?.LogWarning(
+                        $"{name} Patch threw after attaching at least one Harmony method; retained for verified cleanup.");
+                }
+                else
+                {
+                    ResetUninstalledDefinition(name, definition);
+                }
                 return;
             }
 
             // Record only after a successful Patch, so a failed hot reload never leaves a stale
             // record that a later uninstall would try to undo.
-            var installed = new InstalledPatch { Target = target, Reset = definition.Reset, Compatibility = level };
-            AddMethod(installed, "prefix", prefix);
-            AddMethod(installed, "postfix", postfix);
-            AddMethod(installed, "transpiler", transpiler);
-            AddMethod(installed, "finalizer", finalizer);
+            InstalledPatch installed = CreateInstalled(target, definition, prefix, postfix, transpiler, finalizer);
             _installed[id] = installed;
             status.Add(new PatchStatusEntry(name, true, PatchResult.Applied, FormatMethod(target), level));
         }
@@ -197,6 +234,53 @@ namespace PeakSafeOptimizer.Infrastructure
             MethodInfo method = harmonyMethod?.method;
             if (method != null)
                 installed.Methods.Add(new PatchMethodRecord(kind, method));
+        }
+
+        private static InstalledPatch CreateInstalled(
+            MethodBase target,
+            PatchDefinition definition,
+            HarmonyMethod prefix,
+            HarmonyMethod postfix,
+            HarmonyMethod transpiler,
+            HarmonyMethod finalizer)
+        {
+            var installed = new InstalledPatch
+            {
+                Target = target,
+                Reset = definition.Reset,
+                Compatibility = definition.Compatibility
+            };
+            AddMethod(installed, "prefix", prefix);
+            AddMethod(installed, "postfix", postfix);
+            AddMethod(installed, "transpiler", transpiler);
+            AddMethod(installed, "finalizer", finalizer);
+            return installed;
+        }
+
+        private bool HasAttachedMethod(InstalledPatch installed)
+        {
+            for (int i = 0; i < installed.Methods.Count; i++)
+            {
+                if (IsStillAttached(installed.Target, installed.Methods[i].Method))
+                    return true;
+            }
+            return false;
+        }
+
+        private void ResetUninstalledDefinition(string name, PatchDefinition definition)
+        {
+            if (definition.Reset == null)
+                return;
+            try
+            {
+                definition.Reset();
+            }
+            catch (Exception ex)
+            {
+                _log?.LogError(
+                    $"{name} reset failed safely after an uninstalled initialization path: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         private void UninstallOne(PatchId id, PatchStatus status)
@@ -250,19 +334,24 @@ namespace PeakSafeOptimizer.Infrastructure
             }
 
             // Order matters: all Unpatch calls succeeded → Reset → drop the record.
-            string resetNote = string.Empty;
             if (installed.Reset != null)
             {
                 try { installed.Reset(); }
                 catch (Exception ex)
                 {
-                    resetNote = $" (reset failed safely: {ex.GetType().Name}: {ex.Message})";
                     _log?.LogError($"{name} reset failed safely after uninstall: {ex.GetType().Name}: {ex.Message}");
+                    // All Harmony methods are detached, but static state was not proven clean. Keep
+                    // the record so a later shutdown/retry can run Reset again instead of reporting
+                    // a successful uninstall with stale accessors.
+                    status.Add(new PatchStatusEntry(name, false, PatchResult.FailedUninstall,
+                        $"Harmony methods detached but reset failed ({ex.GetType().Name}: {ex.Message})",
+                        installed.Compatibility));
+                    return;
                 }
             }
             _installed.Remove(id);
             status.Add(new PatchStatusEntry(name, false, PatchResult.Uninstalled,
-                "uninstalled" + resetNote, installed.Compatibility));
+                "uninstalled", installed.Compatibility));
         }
 
         private bool IsStillAttached(MethodBase target, MethodInfo patchMethod)

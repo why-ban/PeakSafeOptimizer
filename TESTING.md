@@ -19,7 +19,7 @@
 启动日志逐行均带 `PeakSafeOptimizer |` 前缀，用该关键字过滤可整块取出报告。
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
-- 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。两种模式都不跳过任何补丁的验证。
+- 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
 - 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=50, enabled=35, applied=35, skipped=15, failed=0, module-failures=0`。
   - `registered=50` = 35 个真实补丁 + 15 个保留占位键。
   - `applied=35` 是真正的有效值；`skipped=15` 对应 15 个默认 `false` 的保留键（`disabled by configuration`）。
@@ -28,21 +28,22 @@
   - `skipped  : <名称> [n/a] SkippedDisabled: disabled by configuration`（15 行保留键）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
-- 退出时无 `UnpatchSelf failed`。
+- 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
+- 退出时无 `verified uninstall failed`，且没有遗留 Harmony 方法；插件使用逐补丁卸载，不调用全局 `UnpatchSelf`。
 
 ### MVID 不匹配验证（模拟旧/新 MVID，验证逐项 fail-closed 而非全灭）
 
-MVID 只做诊断，不做全局门控；目标是证明「MVID 不符时各补丁靠自身校验决定去留，局部更新只影响相关补丁」。
+MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为替换补丁在未知构建安全跳过，局部更新只影响相关补丁」。
 
 **方法 A（改预期值模拟，不改游戏文件）**：临时把 `Infrastructure\BuildFingerprint.cs` 中 `CurrentAssemblyCSharpMvid` 改为一个不存在的 GUID，重新 `dotnet build` 后启动。
 
-- 预期日志：`compatibility mode: structural-validation`；`mode meaning` 行说明「MVID alone never skips a patch」。
-- 因游戏实际结构未变，35 个补丁仍应各自通过结构/IL 校验 → `applied=35, failed=0`。**关键断言**：没有任何一项仅因 MVID 不符而被跳过，也没有全局失败。
+- 预期日志：`compatibility mode: structural-validation`；`mode meaning` 行说明结构守卫继续验证，行为替换补丁因未认证而安全跳过。
+- 因游戏实际结构未变，`RunBasedValues` 等 `Structural` 补丁仍应验证；其余当前行为替换补丁预期为 `SkippedUncertifiedBuild`。**关键断言**：没有全局失败，也没有在未知构建上静默替换新版原方法。
 - 测完改回原 GUID 并重建。
 
 **方法 B（真实结构差异，需一个实际更新/热修过的 Assembly-CSharp）**：
 
-- 预期：`structural-validation` 模式；只有那些 `Initialize` 结构校验（成员缺失/变形 → `SkippedStructureMismatch`）或 IL 匹配失败（`SkippedIlMismatch`）的补丁被单独跳过，其余照常 `Applied`。
+- 预期：`structural-validation` 模式；当前 `Fingerprint`/`StrictIl` 补丁先因未认证而 `SkippedUncertifiedBuild`，结构级补丁继续验证；若未来提供方法级指纹，则只有结构校验（成员缺失/变形 → `SkippedStructureMismatch`）或 IL 匹配失败（`SkippedIlMismatch`）的补丁被单独跳过。
 - 关键断言：被跳过的是**特定项**（如某个目标方法被改写的补丁），而不是整个模组；日志里每个跳过项都带明确的 `Reason`。
 
 ### 热重载自测
@@ -51,7 +52,7 @@ MVID 只做诊断，不做全局门控；目标是证明「MVID 不符时各补�
 2. 观察日志：应出现 `HotReload: ItemCollisionMode disabled→uninstalled` 与 `HotReload: ItemCollisionMode enabled→installed`。
 3. 把另一个默认开启的 `Experimental.*` 补丁（例如 `Experimental.ExplosionScale`）关掉再打开，观察同格式两行。
 4. 把一个未注册键（例如 `Fixes.RopeRendering`）改为 `true`：应输出 `HotReload: RopeRendering enabled→SkippedNoDefinition: no definition registered`，且不产生任何实际补丁。
-5. 对唯一 Transpiler（`Fixes.BreakableBridge`）做一次开关，观察是否仍正常工作；若出现 `InvalidProgramException` 或 `UnpatchSelf` 报错，立即重启确认，不要在运行中反复切换它。
+5. 对唯一 Transpiler（`Fixes.BreakableBridge`）做一次开关，观察是否仍正常工作；若出现 `InvalidProgramException` 或 `verified uninstall failed`，立即重启确认，不要在运行中反复切换它。
 6. 值类型配置（`Diagnostics.DetailedLogging`、爆炸集群/距离参数、远端 LOD 距离、`DetailBodypartThrottleInterval`）改值后即时生效，无需热重载动作。
 
 ## 1. 立即停止的恶性判据
@@ -173,7 +174,7 @@ MVID 只做诊断，不做全局门控；目标是证明「MVID 不符时各补�
 6. 已安装其它模组清单；队伍中是否有人装自定义军号曲目模组。
 7. 网络/渲染问题需房主与客户端同期日志。
 
-检索关键词：`PeakSafeOptimizer`、`compatibility mode`、`MVID`、`applied`、`skipped`、`failed`、`SkippedStructureMismatch`、`SkippedIlMismatch`、`SkippedNoDefinition`、`no definition registered`、`Harmony`、`InvalidProgramException`、`NullReferenceException`、`ArgumentOutOfRangeException`、`IndexOutOfRangeException`、`Repair reason`、`HotReload`、`UnpatchSelf`。
+检索关键词：`PeakSafeOptimizer`、`compatibility mode`、`MVID`、`applied`、`skipped`、`failed`、`SkippedStructureMismatch`、`SkippedIlMismatch`、`SkippedUncertifiedBuild`、`SkippedNoDefinition`、`no definition registered`、`Harmony`、`InvalidProgramException`、`NullReferenceException`、`ArgumentOutOfRangeException`、`IndexOutOfRangeException`、`Repair reason`、`HotReload`、`verified uninstall`。
 
 ## 6. 结果记录模板
 
@@ -184,7 +185,7 @@ BepInEx 版本 / 其它模组数量：
 人数与房主：
 本轮启用键（仅列 true）：
 启动状态摘要（registered/enabled/applied/skipped/failed 数量与异常项及 Reason）：
-退出时是否 UnpatchSelf 报错：
+退出时是否 verified uninstall 失败：
 热重载自测结果（含 Transpiler）：
 第一层结果（A1–A6、B1–B13、C1–C8、D1–D3、组合长时）：
 第二层结果（掉落物数量、爆炸卡顿、人数阶梯、流畅度）：

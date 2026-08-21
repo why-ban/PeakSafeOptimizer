@@ -177,6 +177,8 @@ namespace PeakSafeOptimizer.Patches.Scale
             }
 
             float radiusSqr = radius * radius;
+            if (!(radiusSqr > 0f) || float.IsInfinity(radiusSqr))
+                return true;
             Vector3 origin = selfTransform.position;
             float heatAmount = __instance.heatAmount;
             bool ownerShortCircuit = _ownerShortCircuitProven;

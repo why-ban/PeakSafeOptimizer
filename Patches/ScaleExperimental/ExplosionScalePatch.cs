@@ -74,6 +74,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private static readonly Vector3[] _clusterPositions = new Vector3[RingCapacity];
         private static readonly float[] _clusterTimes = CreateEmptyTimes();
         private static int _clusterWriteIndex;
+        private static int _clusterSceneHandle = int.MinValue;
 
         internal static void Initialize()
         {
@@ -127,10 +128,18 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 _clusterTimes[i] = float.NegativeInfinity;
             }
             _clusterWriteIndex = 0;
+            _clusterSceneHandle = int.MinValue;
         }
 
         internal static bool Prefix(ExplosionEffect __instance)
         {
+            int sceneHandle = __instance.gameObject.scene.handle;
+            if (_clusterSceneHandle != sceneHandle)
+            {
+                Reset();
+                _clusterSceneHandle = sceneHandle;
+            }
+
             ConfigEntry<int> pointCapEntry = OptimizerConfig.ExplosionPointCount;
             ConfigEntry<int> subPointCapEntry = OptimizerConfig.ExplosionSubPointCount;
             if (pointCapEntry == null || subPointCapEntry == null)

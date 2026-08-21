@@ -17,7 +17,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     nameof(ItemDatabaseNameLookupPatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: ItemDatabaseNameLookupPatch.Reset));
-            context.RegisterCleanup(ItemDatabaseNameLookupPatch.Reset);
         }
     }
 }

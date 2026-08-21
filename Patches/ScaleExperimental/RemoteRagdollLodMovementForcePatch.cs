@@ -23,6 +23,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// </summary>
     internal static class RemoteRagdollLodMovementForcePatch
     {
+        private static bool _acquired;
+
         internal static void Initialize()
         {
             ResolveAndValidateTarget();
@@ -34,6 +36,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             // Acquired last so a failed Initialize never leaves a reference on the shared helper.
             RemoteRagdollLod.Acquire();
+            _acquired = true;
         }
 
         internal static MethodInfo ResolveAndValidateTarget()
@@ -48,6 +51,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
         internal static void Reset()
         {
+            if (!_acquired)
+                return;
+            _acquired = false;
             RemoteRagdollLod.Release();
         }
 

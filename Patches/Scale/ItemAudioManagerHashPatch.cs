@@ -262,10 +262,10 @@ namespace PeakSafeOptimizer.Patches.Scale
             float dt = Time.deltaTime;
             float volume = getVolume(throwCharge);
             float newVolume = Mathf.Lerp(volume, 0f, dt * 5f);
-            if (!Mathf.Approximately(newVolume, volume)) setVolume(throwCharge, newVolume);
+            if (newVolume != volume) setVolume(throwCharge, newVolume);
             float pitch = getPitch(throwCharge);
             float newPitch = Mathf.Lerp(pitch, 1f, dt * 5f);
-            if (!Mathf.Approximately(newPitch, pitch)) setPitch(throwCharge, newPitch);
+            if (newPitch != pitch) setPitch(throwCharge, newPitch);
 
             string prevUse = prevUseRef(__instance);
             bool hasPrevUse = !string.IsNullOrEmpty(prevUse);
@@ -312,11 +312,11 @@ namespace PeakSafeOptimizer.Patches.Scale
                 {
                     float v = getVolume(throwCharge);
                     float nv = Mathf.Lerp(v, 0.3f, dt * 10f);
-                    if (!Mathf.Approximately(nv, v)) setVolume(throwCharge, nv);
+                    if (nv != v) setVolume(throwCharge, nv);
 
                     float p = getPitch(throwCharge);
                     float np = Mathf.Lerp(p, 2f + throwChargeLevel * 3f, dt * 10f);
-                    if (!Mathf.Approximately(np, p)) setPitch(throwCharge, np);
+                    if (np != p) setPitch(throwCharge, np);
                 }
 
                 Item prevItem = prevItemRef(__instance);

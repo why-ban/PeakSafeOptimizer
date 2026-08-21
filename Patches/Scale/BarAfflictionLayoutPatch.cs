@@ -66,7 +66,9 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
-            if (Mathf.Approximately(__instance.width, __instance.size))
+            float width = __instance.width;
+            float next = Mathf.Lerp(width, __instance.size, Mathf.Min(Time.deltaTime * 10f, 0.1f));
+            if (next == width)
                 return false;
 
             return true;
