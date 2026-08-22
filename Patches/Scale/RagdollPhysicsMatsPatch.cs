@@ -22,8 +22,12 @@ namespace PeakSafeOptimizer.Patches.Scale
     ///
     /// The signature also folds in the identity of the material actually present on every collider
     /// of each part, so an external writer that changes sharedMaterial on any of them is detected.
-    /// As a further safety net the original is force-allowed through at least every 300 frames or 5
-    /// seconds even when nothing appears to have changed, so any undetected divergence self-heals.
+    /// That collider-material audit is the expensive half (one native sharedMaterial read per
+    /// collider per part), so it runs only on the audit ticks that already force the original
+    /// through anyway - every 300 frames or 5 seconds. In between, the cheap managed signature
+    /// (friction type, part count, per-part collider count and frictionType, the two material
+    /// fields) decides. An undetected external write is therefore corrected within one audit
+    /// window, which is exactly the tolerance the force-refresh already established.
     /// </summary>
     internal static class RagdollPhysicsMatsPatch
     {
@@ -41,6 +45,8 @@ namespace PeakSafeOptimizer.Patches.Scale
             internal int FrictionType;
             internal int PartCount;
             internal int ColliderSignature;
+            /// <summary>Collider-material audit hash, only recomputed on audit ticks.</summary>
+            internal int MaterialAuditSignature;
             internal int SlipperyMatId;
             internal int NormalMatId;
             internal int LastForcedFrame;
@@ -53,6 +59,7 @@ namespace PeakSafeOptimizer.Patches.Scale
             internal int PendingFrictionType;
             internal int PendingPartCount;
             internal int PendingColliderSignature;
+            internal int PendingMaterialAuditSignature;
             internal int PendingSlipperyMatId;
             internal int PendingNormalMatId;
         }
@@ -196,6 +203,19 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             int partCount = parts.Count;
             int colliderSignature = 17;
+            State state = states.GetOrCreateValue(__instance);
+            int frame = Time.frameCount;
+            float now = Time.time;
+
+            // Audit ticks are exactly the force-refresh ticks: the original runs on them regardless,
+            // so pairing the expensive collider-material read with them adds no new work.
+            bool forceRefresh = !state.HasApplied ||
+                frame - state.LastForcedFrame >= ForceRefreshFrameInterval ||
+                frame < state.LastForcedFrame ||
+                now - state.LastForcedTime >= ForceRefreshSecondsInterval ||
+                now < state.LastForcedTime;
+
+            int materialAuditSignature = forceRefresh ? 17 : state.MaterialAuditSignature;
             for (int i = 0; i < partCount; i++)
             {
                 Bodypart part = parts[i];
@@ -214,10 +234,13 @@ namespace PeakSafeOptimizer.Patches.Scale
                 {
                     colliderSignature = colliderSignature * 31 + colliders;
                     colliderSignature = colliderSignature * 31 + (int)part.frictionType;
-                    // Real applied material identity of every collider: detects external
-                    // sharedMaterial writes on any collider, not just the first.
-                    colliderSignature = colliderSignature * 31 +
-                        allColliderMaterialIdHashRef(part, MissingColliderMaterialSentinel);
+                    if (forceRefresh)
+                    {
+                        // Real applied material identity of every collider: detects external
+                        // sharedMaterial writes on any collider, not just the first.
+                        materialAuditSignature = materialAuditSignature * 31 +
+                            allColliderMaterialIdHashRef(part, MissingColliderMaterialSentinel);
+                    }
                 }
             }
 
@@ -226,21 +249,12 @@ namespace PeakSafeOptimizer.Patches.Scale
             int slipperyId = slippery != null ? slippery.GetInstanceID() : 0;
             int normalId = normal != null ? normal.GetInstanceID() : 0;
 
-            State state = states.GetOrCreateValue(__instance);
-            int frame = Time.frameCount;
-            float now = Time.time;
-
-            bool forceRefresh = !state.HasApplied ||
-                frame - state.LastForcedFrame >= ForceRefreshFrameInterval ||
-                frame < state.LastForcedFrame ||
-                now - state.LastForcedTime >= ForceRefreshSecondsInterval ||
-                now < state.LastForcedTime;
-
             if (!forceRefresh &&
                 state.HasApplied &&
                 state.FrictionType == frictionType &&
                 state.PartCount == partCount &&
                 state.ColliderSignature == colliderSignature &&
+                state.MaterialAuditSignature == materialAuditSignature &&
                 state.SlipperyMatId == slipperyId &&
                 state.NormalMatId == normalId)
             {
@@ -252,6 +266,7 @@ namespace PeakSafeOptimizer.Patches.Scale
             state.PendingFrictionType = frictionType;
             state.PendingPartCount = partCount;
             state.PendingColliderSignature = colliderSignature;
+            state.PendingMaterialAuditSignature = materialAuditSignature;
             state.PendingSlipperyMatId = slipperyId;
             state.PendingNormalMatId = normalId;
             state.HasPending = true;
@@ -279,6 +294,7 @@ namespace PeakSafeOptimizer.Patches.Scale
             state.FrictionType = state.PendingFrictionType;
             state.PartCount = state.PendingPartCount;
             state.ColliderSignature = state.PendingColliderSignature;
+            state.MaterialAuditSignature = state.PendingMaterialAuditSignature;
             state.SlipperyMatId = state.PendingSlipperyMatId;
             state.NormalMatId = state.PendingNormalMatId;
             state.HasPending = false;

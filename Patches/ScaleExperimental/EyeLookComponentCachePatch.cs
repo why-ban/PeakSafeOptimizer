@@ -11,9 +11,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
     /// Line-for-line replacement of PlayerEyeLook.Update() (audited source
-    /// PlayerEyeLook.cs:58-115) whose only behavioral difference is that the per-frame
+    /// PlayerEyeLook.cs:58-115) with two mechanical differences: the per-frame
     /// GetComponent&lt;AnimatedMouth&gt;() at PlayerEyeLook.cs:70 is served from a per-Character
-    /// cache. The audited IL confirms exactly one GetComponent&lt;AnimatedMouth&gt;() call site.
+    /// cache (the audited IL confirms exactly one call site), and the eye material write uses the
+    /// int property id from Shader.PropertyToID("_EyePosition") instead of the string overload.
+    /// Material.SetVector(string, Vector4) is itself just SetColorImpl(Shader.PropertyToID(name),
+    /// value) (Material.cs:1849-1857), so hoisting the id out of the loop is exact.
     ///
     /// Everything else is preserved verbatim:
     ///   - characters = Character.AllCharacters and distance = +Infinity every frame
@@ -49,6 +52,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private static AccessTools.FieldRef<PlayerEyeLook, Vector2> _eyeTarget;
         private static AccessTools.FieldRef<PlayerEyeLook, Vector3> _lastViewDir;
         private static Func<Character, BodypartType, Bodypart> _getBodypart;
+        private static int _eyePositionId;
 
         internal static void Initialize()
         {
@@ -137,6 +141,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _eyeTarget = eyeTarget;
             _lastViewDir = lastViewDir;
             _getBodypart = getBodypart;
+            _eyePositionId = Shader.PropertyToID("_EyePosition");
         }
 
         internal static MethodInfo ResolveAndValidateTarget()
@@ -159,6 +164,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _eyeTarget = null;
             _lastViewDir = null;
             _getBodypart = null;
+            _eyePositionId = 0;
         }
 
         internal static bool Prefix(PlayerEyeLook __instance)
@@ -316,10 +322,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 Time.deltaTime * __instance.lookSmoothing * num4);
 
             Vector2 eyePos = eyePosRef(__instance);
+            int eyePositionId = _eyePositionId;
             for (int j = 0; j < renderers.Length; j++)
             {
                 Renderer renderer = renderers[j];
-                renderer.material.SetVector("_EyePosition", eyePos);
+                renderer.material.SetVector(eyePositionId, eyePos);
             }
 
             // PlayerEyeLook.cs:111-114

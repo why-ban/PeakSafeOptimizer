@@ -1,6 +1,6 @@
 # PeakSafeOptimizer 0.1.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**35 项有效补丁与详细诊断默认开启**的安全性，并针对「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」三个痛点取得可比较的观察结果。15 个无实现保留键保持默认关闭。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**39 项有效补丁与详细诊断默认开启**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。15 个无实现保留键保持默认关闭。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
@@ -8,9 +8,9 @@
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认：**35 项有效补丁与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
+3. 第一层用出厂默认：**39 项有效补丁与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
 
-   `RunBasedValues`、`Parachute`、`BugleClipGuard`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`。
+   `RunBasedValues`、`Parachute`、`BugleClipGuard`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`。
 
 4. 准备一次不装插件的同场景基准（同人数/地点/操作序列）才能判断收益。
 
@@ -20,12 +20,12 @@
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=50, enabled=35, applied=35, skipped=15, failed=0, module-failures=0`。
-  - `registered=50` = 35 个真实补丁 + 15 个保留占位键。
-  - `applied=35` 是真正的有效值；`skipped=15` 对应 15 个默认 `false` 的保留键（`disabled by configuration`）。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=54, applied=39, skipped=15, failed=0, module-failures=0`（`enabled` 视 cfg 中保留键是否被手动置 true）。
+  - `registered=54` = 39 个真实补丁 + 15 个保留占位键。
+  - `applied=39` 是真正的有效值；`skipped=15` 对应 15 个保留键（默认 `false` 时 `disabled by configuration`，手动置 `true` 时 `no definition registered`）。
 - 逐项结果三类行：
-  - `applied  : <名称> [<兼容等级>] <目标方法>`（35 行，兼容等级为 Structural/Fingerprint/StrictIl）。
-  - `skipped  : <名称> [n/a] SkippedDisabled: disabled by configuration`（15 行保留键）。
+  - `applied  : <名称> [<兼容等级>] <目标方法>`（39 行，兼容等级为 Structural/Fingerprint/StrictIl）。
+  - `skipped  : <名称> [n/a] SkippedDisabled / SkippedNoDefinition`（15 行保留键）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
 - 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
@@ -59,9 +59,9 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 崩溃/卡死/无限加载/掉线循环；存档异常；场景切换/机场/结算/复活/重连异常；网络状态分叉（桥梁人数、营火范围、物品位置/尺寸长期不一致）；地面物品卡住/抖动/无法拾取/尺寸卡住；负重/荆棘/箭矢数值错误；打滑抓地突变；嘴部贴图卡在说话帧；名字牌长期不消失；日志高速增长或 `InvalidProgramException`。
 
-回滚顺序：先关最近启用的单项，再逐项关闭 35 项默认开启定位，最后无插件复现确认是否原版问题。
+回滚顺序：先关最近启用的单项，再逐项关闭 39 项默认开启定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（35 项全开）
+## 2. 第一层：默认配置安全性（39 项全开）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
@@ -114,6 +114,10 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | D1 | 四项 `RemoteRagdollLod*` | 一名远端玩家从 40 米走到 70 米再返回并切换装备 | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态 |
 | D2 | `JointProjection` | 正常角色生成与其它模组运行时建 rig（若存在） | 正常游戏无差异、无 null/反射异常；审计构建中预期通常不触发 |
 | D3 | `DetailBodypartThrottle` | 8 人近距聚集、移动、抓取、攀爬、倒地 | 本地角色不受影响；远端手指/jiggle/嘴颌轻微降帧可接受；关节不漂浮、不爆力、不出现 NaN |
+| D4 | `PocketBehaviorGuard` | 新玩家加入 / 重连 | 注册窗口不再出现 `UpdatePocketBehaviors` 空引用刷屏；口袋物品（背包内被动效果）行为正常 |
+| D5 | `BodypartDragIdentity` | 倒地堆叠、被风滚草撞倒、拖拽 | 阻尼观感与原版一致；手指自然下垂正常；无速度异常累积 |
+| D6 | `LightVolumeSampleCache` | 多人聚集说话、进出隧道/开阔地、风区 | 语音混响随位置变化正常；环境混响与风区判定与原版一致；重烘焙/切段后无陈旧值 |
+| D7 | `TumbleWeedTargetScan` | 方山风滚草过境（单人与多人） | 风滚草仍追人、撞击掉血与击倒正常；转向无明显迟钝；非房主端行为不变 |
 
 ### 2.5 组合长时
 
@@ -149,6 +153,17 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 按 4 → 6 → 8 → 10 人递增复测 3.1、3.3、3.5，每档记录人数、地面物品数、主观流畅度、周期卡顿、日志新增。
 
+### 3.8 方山（Mesa / Desert）专项对比（本轮核心）
+
+在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
+
+1. 全部默认（39 项开启）与本插件完全卸载的基线对比。
+2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
+3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
+4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
+
+研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本），Harmony 补丁够不到。本轮四项只削减 CPU/GC 负载，**不应期待它们单独把 10-20 FPS 拉回正常**；GPU 侧仍需画质设置 A/B（MSAA↔TAA、阴影距离、分辨率缩放）闭环判定。
+
 ## 4. 第三层：逐项开关实验（每次只关/开一个）
 
 第一、二层稳定后执行。先验证「默认开→关」回退是否消除某一异常，再验证「单独开」收益。每项测完恢复默认。
@@ -163,6 +178,9 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | 6 | `Experimental.ExplosionScale` | 4+ | 多人同时投掷炸药 | 降低球数后视觉可接受度、卡顿改善、无负面效果 |
 | 7 | `Experimental.DetailBodypartThrottle` | 8+ | 全员近距聚集/碰撞 | 开关两组帧时间差；远端手指/jiggle 可接受度；无物理异常 |
 | 8 | 四项 `Experimental.RemoteRagdollLod*` | 2+ | 50/60 米往返 | 远距收益与近距无收益均符合预期；交互时正确回退 |
+| 9 | `Experimental.TumbleWeedTargetScan` | 1/8+ | 方山风滚草过境 | 追踪与撞击行为不变；扫描降频后帧时间差 |
+| 10 | `Fixes.LightVolumeSampleCache` | 8+ | 多人说话 + 进出遮蔽 | 混响随位置变化正常；GetPixel 调用量下降 |
+| 11 | `Fixes.BodypartDragIdentity` | 8+ | 全员倒地堆叠 | 阻尼一致；倒地场景帧时间差 |
 
 ## 5. 日志与配置收集清单
 

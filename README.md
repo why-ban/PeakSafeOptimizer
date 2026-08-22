@@ -58,9 +58,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 仍未完成：多人压力基准、长时稳定性、性能基准。本文不提供任何帧率数字。
 
-## 已注册补丁（35 项，全部默认开启）
+## 已注册补丁（39 项，全部默认开启）
 
-当前是私人集中测试配置：35 个有实现的补丁与 `Diagnostics.DetailedLogging` 全部默认开启。15 个无实现或已撤下的保留键仍默认关闭，不会重新启用已确认危险的旧实现。下表「默认」列均为补丁开关默认值。
+当前是私人集中测试配置：39 个有实现的补丁与 `Diagnostics.DetailedLogging` 全部默认开启。15 个无实现或已撤下的保留键仍默认关闭，不会重新启用已确认危险的旧实现。下表「默认」列均为补丁开关默认值。
 
 ### 稳定性修复（`Patches\Stability`，6 项）
 
@@ -116,6 +116,15 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.AnimatorValuesHash` | `true` | Fingerprint | Prefix（完整替换）：`AnimatorValues.Update()` | Animator 字符串参数改为一次性 hash，并跳过值未变化的写入；接地后的 `sprintAnimationDisabled` 清理保持原顺序。 |
 | `Fixes.PlayerNameUiWrites` | `true` | Fingerprint | Prefix（完整替换）：`UIPlayerNames.UpdateName(int, Vector3, bool, int)` | 名字牌位置仍每帧更新，仅在 sprite、active 与 alpha 目标实际变化时写 UI 状态。 |
 
+### 聚集与方山专项（本轮新增 4 项）
+
+| 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用 |
+|---|---:|---|---|---|
+| `Fixes.PocketBehaviorGuard` | `true` | Fingerprint | Prefix：`CharacterItems.UpdatePocketBehaviors()` | 加入/注册窗口 `character.player` 未链接时跳过该帧，消除实测 14 次逐帧空引用；数据就绪后逐行走原方法。 |
+| `Fixes.BodypartDragIdentity` | `true` | Fingerprint | Prefix：`Bodypart.Drag(float, bool)` | 有效 drag 精确等于 `1f` 时跳过两次速度乘法（IEEE 恒等）。倒地/被风滚草撞倒的角色 `currentRagdollControll == 0`，命中率最高。 |
+| `Fixes.LightVolumeSampleCache` | `true` | Fingerprint | Prefix+Postfix：`LightVolume.SamplePositionAlpha(Vector3, bool)` | 按截断后的光照体素缓存 `Texture3D.GetPixel` 结果；每角色每帧的语音遮蔽采样、环境混响与风区采样共享同一缓存。贴图实例或 `updateCount` 变化即整体失效。 |
+| `Experimental.TumbleWeedTargetScan` | `true` | Fingerprint | Prefix：`TumbleWeed.FixedUpdate()` | 风滚草的目标扫描默认每 5 个物理 tick 解一次并复用，`AddForce` 仍每 tick 施加且方向按缓存目标当前 Center 重算；距离比较改平方。沙漠/方山专项。 |
+
 ### 远端与物理实验（`Patches\ScaleExperimental`，6 项）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
@@ -139,7 +148,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - `RagdollPhysicsMats` 签名纳入每个 Bodypart 全部 collider 材质 ID（不再是只取首个）。
 - `ExplosionScale` 对负 prefab count 做保护。
 - `EyeLook` 依赖验证前移、`eyeRenderers == null` 保持原 NRE 行为。
-- 所有 35 个补丁补齐 `Reset` 并由安装器统一管理（卸载后清理静态/缓存状态）。
+- 所有 39 个补丁补齐 `Reset` 并由安装器统一管理（卸载后清理静态/缓存状态）。
+- `RagdollPhysicsMats` 的逐碰撞体材质审计改为只在既有的 300 帧 / 5 秒强制刷新 tick 上计算，其余 tick 只比对廉价托管签名，降低补丁自身的 native 读密度。
+- `EyeLookComponentCache` 的眼球材质写改用 `Shader.PropertyToID("_EyePosition")` 的 int 重载，消除每角色每帧的字符串查找。
 
 ## 保留配置键但未注册的项
 
@@ -181,6 +192,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.RemoteRagdollLodEnterDistance` | `60` | 远端角色进入被动 ragdoll 层级的距离。 |
 | `Experimental.RemoteRagdollLodExitDistance` | `50` | 远端角色恢复完整行为的距离。 |
 | `Experimental.DetailBodypartThrottleInterval` | `3` | 远端细节部件每 N 个物理 tick 执行一次 Animate；1 为不降频，运行时最大钳制到 10。 |
+| `Experimental.TumbleWeedTargetScanInterval` | `5` | 风滚草每 N 个物理 tick 重解一次追踪目标；1 为每 tick 重扫，运行时最大钳制到 10。 |
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
 

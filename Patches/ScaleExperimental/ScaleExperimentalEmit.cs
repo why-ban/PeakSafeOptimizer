@@ -279,6 +279,47 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             return getter;
         }
 
+        /// <summary>
+        /// Emits a call to an instance method taking (Vector3, intBackedEnum) on a type this project
+        /// cannot reference at compile time, for example Rigidbody.AddForce(Vector3, ForceMode).
+        /// </summary>
+        internal static Action<UnityEngine.Object, Vector3, int> CreateVector3EnumAction(
+            Type declaringType, MethodInfo target)
+        {
+            if (declaringType == null) throw new ArgumentNullException(nameof(declaringType));
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (target.DeclaringType != declaringType || target.IsStatic ||
+                target.ReturnType != typeof(void) || target.ContainsGenericParameters)
+            {
+                throw new InvalidOperationException($"Unexpected method structure: {target.Name}");
+            }
+            ParameterInfo[] parameters = target.GetParameters();
+            if (parameters.Length != 2 || parameters[0].ParameterType != typeof(Vector3) ||
+                !parameters[1].ParameterType.IsEnum ||
+                Enum.GetUnderlyingType(parameters[1].ParameterType) != typeof(int))
+            {
+                throw new InvalidOperationException($"Unexpected parameter structure: {target.Name}");
+            }
+            if (!typeof(UnityEngine.Object).IsAssignableFrom(declaringType))
+                throw new InvalidOperationException($"{declaringType.FullName} is not a UnityEngine.Object");
+
+            var method = new DynamicMethod(
+                "PSO_CallV3Enum_" + target.Name,
+                typeof(void),
+                new[] { typeof(UnityEngine.Object), typeof(Vector3), typeof(int) },
+                typeof(ScaleExperimentalEmit).Module,
+                true);
+            ILGenerator il = method.GetILGenerator();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Castclass, declaringType);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Ldarg_2);
+            il.Emit(OpCodes.Callvirt, target);
+            il.Emit(OpCodes.Ret);
+            return (Action<UnityEngine.Object, Vector3, int>)method.CreateDelegate(
+                typeof(Action<UnityEngine.Object, Vector3, int>));
+        }
+
         private static void RequireInstanceVoid(Type declaringType, MethodInfo target, Type parameterType)
         {
             if (declaringType == null) throw new ArgumentNullException(nameof(declaringType));

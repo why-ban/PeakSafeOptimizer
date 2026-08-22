@@ -117,7 +117,23 @@ namespace PeakSafeOptimizer.Config
         DetailBodypartThrottle,
         CollisionCharacterLookup,
         AnimatorValuesHash,
-        PlayerNameUiWrites
+        PlayerNameUiWrites,
+        // Stability-style guard in the Scale lane: protects CharacterItems.UpdatePocketBehaviors()
+        // during the join window, where Character.player (a PlayerHandler lookup, Character.cs:201)
+        // is not linked yet and the original dereferences character.player.itemSlots every frame.
+        // Confirmed in-game: 14 NullReferenceException around the player registration log lines.
+        PocketBehaviorGuard,
+        // Scale lane: skips Bodypart.Drag when the effective drag is exactly 1f, which makes both
+        // velocity multiplications IEEE identities. Concentrated on ragdolled characters, because
+        // currentRagdollControll == 0 gives Mathf.Lerp(1f, drag, 0f) == 1f.
+        BodypartDragIdentity,
+        // Scale lane: caches LightVolume.SamplePositionAlpha per truncated lightmap voxel, so the
+        // per-character Texture3D.GetPixel behind VoiceObscuranceFilter.Update (plus the ambience and
+        // wind callers) collapses to one read per distinct voxel per lightmap generation.
+        LightVolumeSampleCache,
+        // ScaleExperimental lane: reuses a tumbleweed's chase target for a few physics ticks instead
+        // of rescanning every character every tick. Desert/Mesa specific because tumbleweeds are.
+        TumbleWeedTargetScan
     }
 
     public sealed class OptimizerConfig
@@ -159,6 +175,11 @@ namespace PeakSafeOptimizer.Config
         // Patches\ScaleExperimental\DetailBodypartThrottlePatch, which treats 1 or less as "no
         // throttling" and clamps anything above 10, so no value can freeze a detail part.
         internal static ConfigEntry<int> DetailBodypartThrottleInterval;
+
+        // Rescan interval for the TumbleWeedTargetScan entry. Read at runtime by
+        // Patches\ScaleExperimental\TumbleWeedTargetScanPatch, which treats 1 or less as "rescan
+        // every tick" and clamps anything above 10.
+        internal static ConfigEntry<int> TumbleWeedTargetScanInterval;
 
         public bool IsEnabled(PatchId id) => _patches.TryGetValue(id, out ConfigEntry<bool> entry) && entry.Value;
 
@@ -261,7 +282,13 @@ namespace PeakSafeOptimizer.Config
                     BindExperimental(config, PatchId.DetailBodypartThrottle, true),
                 [PatchId.CollisionCharacterLookup] = BindPatch(config, PatchId.CollisionCharacterLookup, true),
                 [PatchId.AnimatorValuesHash] = BindPatch(config, PatchId.AnimatorValuesHash, true),
-                [PatchId.PlayerNameUiWrites] = BindPatch(config, PatchId.PlayerNameUiWrites, true)
+                [PatchId.PlayerNameUiWrites] = BindPatch(config, PatchId.PlayerNameUiWrites, true),
+                [PatchId.PocketBehaviorGuard] = BindPatch(config, PatchId.PocketBehaviorGuard, true),
+                [PatchId.BodypartDragIdentity] = BindPatch(config, PatchId.BodypartDragIdentity, true),
+                [PatchId.LightVolumeSampleCache] =
+                    BindPatch(config, PatchId.LightVolumeSampleCache, true),
+                [PatchId.TumbleWeedTargetScan] =
+                    BindExperimental(config, PatchId.TumbleWeedTargetScan, true)
             };
             ExplosionPointCount = config.Bind("Experimental", "ExplosionPointCount", 3,
                 "Upper bound for explosionPointCount when ExplosionScale is enabled. Vanilla is 4, " +
@@ -287,6 +314,10 @@ namespace PeakSafeOptimizer.Config
                 "Animate for detail bodyparts (fingers / jiggle bones / toes / mouth and jaw) of " +
                 "remote characters runs once every N physics ticks; 1 = no throttling. Values " +
                 "above 10 are clamped to 10 at runtime.");
+            TumbleWeedTargetScanInterval = config.Bind("Experimental", "TumbleWeedTargetScanInterval", 5,
+                "A tumbleweed re-solves its chase target once every N physics ticks and reuses the " +
+                "previous direction in between; 1 = rescan every tick. Values above 10 are clamped " +
+                "to 10 at runtime.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");
             return new OptimizerConfig(patches, detailed);
