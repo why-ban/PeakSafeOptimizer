@@ -24,6 +24,7 @@ namespace PeakSafeOptimizer
         private OptimizerConfig _settings;
         private PatchInstaller _installer;
         private GraphicsBudget _graphicsBudget;
+        private HeatHazeSuppressor _heatHaze;
         private CollisionCallbackReuse _collisionReuse;
         private int _mainThreadId;
         private readonly ConcurrentQueue<PatchId> _pendingSettingChanges = new ConcurrentQueue<PatchId>();
@@ -53,6 +54,7 @@ namespace PeakSafeOptimizer
 
                 // Non-Harmony lanes, both driven from Update and both restoring what they found.
                 _graphicsBudget = new GraphicsBudget(Logger);
+                _heatHaze = new HeatHazeSuppressor(Logger);
                 _collisionReuse = new CollisionCallbackReuse(Logger);
                 _collisionReuse.Evaluate(_installer);
 
@@ -132,6 +134,15 @@ namespace PeakSafeOptimizer
                 ApplySettingChange(id);
 
             _graphicsBudget?.Update(Time.unscaledDeltaTime);
+        }
+
+        /// <summary>
+        /// DayNightManager writes its shader globals from Update and from a blend coroutine, both of
+        /// which run before LateUpdate, so this is the frame's last writer without needing a patch.
+        /// </summary>
+        private void LateUpdate()
+        {
+            _heatHaze?.LateUpdate();
         }
 
         private void ApplySettingChange(PatchId id)
@@ -233,6 +244,16 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Collision reuse shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
             }
             _collisionReuse = null;
+
+            try
+            {
+                _heatHaze?.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Heat haze shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
+            }
+            _heatHaze = null;
 
             try
             {

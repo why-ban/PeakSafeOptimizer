@@ -1,6 +1,6 @@
 # PeakSafeOptimizer 0.1.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**44 项有效补丁与详细诊断默认开启**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**43 项有效补丁与详细诊断默认开启**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
@@ -8,9 +8,9 @@
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认：**44 项有效补丁、两条非 Harmony 车道与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
+3. 第一层用出厂默认：**43 项有效补丁、三条非 Harmony 车道与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
 
-   `RunBasedValues`、`Parachute`、`BugleClipGuard`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.*`。
+   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse`、`Graphics.*` 与 `Graphics.SuppressHeatHaze`。
 
 4. 准备一次不装插件的同场景基准（同人数/地点/操作序列）才能判断收益。
 
@@ -20,10 +20,10 @@
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=44, applied=44, enabled=44, skipped=0, failed=0, module-failures=0`。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=43, applied=43, enabled=43, skipped=0, failed=0, module-failures=0`。
   - 每个开关都对应一个真实注册的补丁，没有只显示不生效的键，所以 `registered` 与 `applied` 应当相等。
 - 逐项结果三类行：
-  - `applied  : <名称> [<兼容等级>] <目标方法>`（44 行，兼容等级为 Structural/Fingerprint/StrictIl）。
+  - `applied  : <名称> [<兼容等级>] <目标方法>`（43 行，兼容等级为 Structural/Fingerprint/StrictIl）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
 - 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
@@ -58,20 +58,19 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 回滚顺序：先关最近启用的单项，再逐项关闭默认开启项定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（44 项全开）
+## 2. 第一层：默认配置安全性（43 项全开）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
-### 2.1 稳定性修复（6 项）
+### 2.1 稳定性修复（5 项）
 
 | 步骤 | 补丁 | 内容 | 通过条件 |
 |---|---|---|---|
 | A1 | `RunBasedValues` | 保存/读取进度 | 无序列化空引用，进度正常 |
 | A2 | `Parachute` | 手持/栏/背包取放降落伞 | 优先级正确、移除不残留、Scoutmaster 不变 |
-| A3 | `BugleClipGuard` | 军号 | 仍能吹响；`IndexOutOfRangeException` 不再出现；与装了曲目模组的玩家曲目不同属可接受降级 |
-| A4 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
-| A5 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
-| A6 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；记录命中的是 localCharacter 还是 data/refs/stats 不完整诊断 |
+| A3 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
+| A4 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
+| A5 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；记录命中的是 localCharacter 还是 data/refs/stats 不完整诊断 |
 
 ### 2.2 等价改写与规模化（15 项，13 组）
 
@@ -128,6 +127,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse` | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
 | E5 | `Fixes.SnowballContactSnapshot` + `Fixes.SnowballContactConsume` | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
 | E6 | `Graphics.*` | 启动后等 10 秒，进游戏看画面；再进设置菜单改一次「阴影距离」和「渲染缩放」 | 日志出现一行 `graphics budget snapshot:`，记录的应是**你自己的画质设置**而不是默认值；关掉 MSAA 后画面应更清晰（0.8 缩放由 STP 上采样），且日志不再刷 `Disabling TAA and STP because MSAA is on`；**阴影距离与级联数必须完全听游戏设置**（本车道已不再碰它们，走动时远处阴影形状不应变化）。把 `Graphics.GraphicsBudgetEnabled` 改为 `false`，画质应回到你的设置。 |
+| E7 | `Graphics.SuppressHeatHaze` | 方山白天站高处看远景；再去其它图（Beach/Alpine/Caldera）看一眼 | 方山热浪扭曲**完全消失**（原本地面上方的空气抖动感不再有）；日志出现一行 `heat haze suppressed: _GlobalHazeAmount was <非零值>`；其它图观感与原版无差别（该量为 0，写 0 是空操作）。把该项改为 `false`，热浪应在下一帧恢复。 |
 
 ### 2.5 组合长时
 
@@ -165,9 +165,10 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 2. `Experimental.DetailBodypartThrottle`
 3. `Fixes.BodypartMovementForceIdentity`
 4. `Experimental.CollisionCallbackReuse`（GC 维度，看帧时间毛刺而不是平均帧率）
-5. `Graphics.GraphicsBudgetEnabled`（GPU 维度，与上面四项互不相干）
+5. `Graphics.SuppressHeatHaze`（GPU 维度，方山全屏效果直击点）
+6. `Graphics.GraphicsBudgetEnabled`（GPU 维度，MSAA 与每顶点骨骼数）
 
-如果只有第 5 项关掉后帧率明显下降、前四项都无差别，那说明这个场景是 GPU bound，继续调 CPU 侧没有意义，应该往画质设置方向走。反之则相反。这一步的判定力比任何单项收益都高。
+如果只有第 5、6 项关掉后帧率明显下降、前四项都无差别，那说明这个场景是 GPU bound，继续调 CPU 侧没有意义。反之则相反。这一步的判定力比任何单项收益都高。
 
 ### 3.7 人数阶梯
 
@@ -177,13 +178,14 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
 
-1. 全部默认（44 项开启）与本插件完全卸载的基线对比。
+1. 全部默认（43 项开启）与本插件完全卸载的基线对比。
 2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
 3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
-5. 仅关闭 `Graphics.GraphicsBudgetEnabled`，同一位置同镜头对比——方山主因判定为 GPU 侧，这一项是唯一直接作用于 GPU 的车道，判定力最高。
+5. 仅关闭 `Graphics.SuppressHeatHaze`，同一位置同镜头对比——方山主因判定为 GPU 侧的全屏效果，这一项是直击点，判定力最高。
+6. 仅关闭 `Graphics.GraphicsBudgetEnabled`（MSAA 与每顶点骨骼数），同一位置同镜头对比。
 
-研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本）。补丁能从代码侧碰的只有游戏没提供设置的那部分：MSAA（关掉还顺带恢复 STP）与每顶点骨骼数。阴影距离/级联属于游戏自带设置，由你在菜单里调，补丁不再覆盖。全屏效果（`_GlobalHazeAmount` 等）虽然同样只被 shader 消费、代码层零消费，但压低它们会直接改变美术观感，**本轮未实施**。
+研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本）。补丁能从代码侧碰的只有游戏没提供设置的那部分：`SuppressHeatHaze`（全屏热浪扭曲，主因 A 的直击点）、MSAA（关掉还顺带恢复 STP）与每顶点骨骼数。阴影距离/级联属于游戏自带设置，由你在菜单里调，补丁不再覆盖。
 
 ## 4. 第三层：逐项开关实验（每次只关/开一个）
 
@@ -210,7 +212,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 3. `Player.log`（LocalLow）与崩溃转储。
 4. 游戏版本、MVID、人数、地图段落、地面物品数、复现步骤、时间点。
 5. 本轮启用键列表（只列 `true`）。
-6. 已安装其它模组清单；队伍中是否有人装自定义军号曲目模组。
+6. 已安装其它模组清单。
 7. 网络/渲染问题需房主与客户端同期日志。
 
 检索关键词：`PeakSafeOptimizer`、`compatibility mode`、`MVID`、`applied`、`skipped`、`failed`、`SkippedStructureMismatch`、`SkippedIlMismatch`、`SkippedUncertifiedBuild`、`Harmony`、`InvalidProgramException`、`NullReferenceException`、`ArgumentOutOfRangeException`、`IndexOutOfRangeException`、`Repair reason`、`HotReload`、`verified uninstall`。

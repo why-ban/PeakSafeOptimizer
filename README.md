@@ -49,26 +49,24 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 - 本插件补丁全程 `applied`、`failed=0`，无 `PeakSafeOptimizer` 异常堆栈。
 - 日志中的大量异常均来自**游戏原版代码或其它模组**，本插件逐项定位后新增守卫：
-  - `BugleSFX.Update` 每帧 `IndexOutOfRangeException`（654 次）——已由 `Fixes.BugleClipGuard` 消除到 0，并记录到 3 次 `currentClip-out-of-range` 修复。
   - `RopeClimbingAPI.GetSegmentFromPercent → CharacterRopeHandling.Climbing` 每帧 `ArgumentOutOfRangeException`（184 次）——已由 `Fixes.RopeSegmentGuard` 消除。
   - `GUIManager.get_canEmote → UpdateEmoteWheel → LateUpdate` 每帧 `NullReferenceException`（2315 次）——已由 `Fixes.EmoteWheelGuard` 对 localCharacter/data/refs/stats 不完整窗口进行防御。当前反编译原版 LateUpdate 已有外层 localCharacter 守卫，因此仍需实机日志确认历史异常究竟来自成员级空窗还是第三方直接调用。
   - `CharacterItems.GetItemPosRight → CharacterAnimations.ConfigureIK → CharacterRagdoll.FixedUpdate` 每帧 `NullReferenceException`（135 次）——已由 `Fixes.IKItemGuard` 消除。
-- 13 次 `RPC method 'RPC_SetSongByName(String)' not found` 属于**其他玩家安装的自定义军号曲目模组**，本机不存在该 RPC 方法，本插件无法修复。
+- 由其它模组造成的异常与卡顿不在本插件职责范围内。例如 13 次 `RPC method 'RPC_SetSongByName(String)' not found` 来自其他玩家安装的自定义军号曲目模组；`BugleSFX.Update` 的越界索引同样源于此，曾经有过守卫（`BugleClipGuard`），已按此原则移除。
 - 排查本插件问题请按 `PeakSafeOptimizer` 关键字过滤，避免与其它模组（如 `PeakStatsEx`、`PEAK_Visuals`）产生的异常混淆。
 
 仍未完成：多人压力基准、长时稳定性、性能基准。本文不提供任何帧率数字。
 
-## 已注册补丁（44 项，全部默认开启）
+## 已注册补丁（43 项，全部默认开启）
 
-当前是私人集中测试配置：44 个有实现的补丁、两条非 Harmony 车道（`Graphics.*` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。配置文件里的每一个开关都对应一个真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为补丁开关默认值。
+当前是私人集中测试配置：43 个有实现的补丁、三条非 Harmony 车道（`Graphics.*`、`Graphics.SuppressHeatHaze` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。配置文件里的每一个开关都对应一个真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为补丁开关默认值。
 
-### 稳定性修复（`Patches\Stability`，6 项）
+### 稳定性修复（`Patches\Stability`，5 项）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
 | `Fixes.RunBasedValues` | `true` | Structural | Prefix：`SerializableRunBasedValues.SerializeRunBasedValues(BinarySerializer)` | 为 null 的两个运行数据字典分配空字典，避免序列化空引用。纯守卫、不吞原方法异常。 |
 | `Fixes.Parachute` | `true` | Fingerprint | Prefix（完整替换）：`CharacterData.UpdateHasParachute()` | 对不完整 character/player/slot/backpack 状态保守清空降落伞缓存，保留 Scoutmaster 与「手持→槽位→背包」优先级。 |
-| `Fixes.BugleClipGuard` | `true` | Fingerprint | Prefix（只改状态）：`BugleSFX.Update()` | 修越界的 `currentClip`（负数归零、超界按 `% Length` 映射、数组空则标记跳过）。根因是原版 `RPC_StartToot` 不校验索引 + 跨客户端曲目模组不一致。副作用是本机曲目可能与发送方不同。 |
 | `Fixes.RopeSegmentGuard` | `true` | Fingerprint | Prefix：`CharacterRopeHandling.Climbing()` | 当所持绳索的 `GetRopeSegments()` 为 null/空，或 `climbingAPI` 为 null 时跳过该帧攀爬。守卫每帧入口而非底层 API，避免把异常换成 `NullReferenceException`。 |
 | `Fixes.IKItemGuard` | `true` | Fingerprint | Prefix：`CharacterAnimations.ConfigureIK()` | 当 `currentItem` 非空但 prefab 缺 `Hand_R`/`Hand_L` 子节点时跳过该帧手部 IK 定位。只在手部节点缺失时跳过，ReachIK 分支不受影响。 |
 | `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | 当 `Character.localCharacter`、data、refs 或 stats 在观战/重生/退出/第三方调用窗口中不完整时跳过表情轮更新。只读不写。 |
@@ -156,10 +154,13 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 |---|---:|---|
 | `Experimental.CollisionCallbackReuse` | `true` | 置 `Physics.reuseCollisionCallbacks = true`。默认 false 时引擎对**每次上报的碰撞**都先分配一个 `Collision` 对象加一个 `ContactPoint[]`（`Collision.cs:87-94` 构造函数里就填好，回调看不看 contacts 都付钱），而每个接触对的两侧各派发一次（`Physics.cs:1440-1454`）——聚集的布娃娃正是这个量最大的场景。仅当上面两个 Snowball 守卫都安装成功才会开启，任一未装立即写回原值；退出时也写回。 |
 | `Graphics.*` | `true` | URP 资产与 QualitySettings 的**单向 min() 上限**，只覆盖游戏画质菜单**没有提供**的项：`GraphicsDisableMsaa`（msaaSampleCount→1 且 QualitySettings.antiAliasing→0）与 `GraphicsSkinWeightCap=2`。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
+| `Graphics.SuppressHeatHaze` | `true` | 每个 LateUpdate 把 shader 全局量 `_GlobalHazeAmount` 写 0，**彻底消除方山的全屏热浪扭曲**。该量由当前段落的 `DayNightProfile` 驱动，只有沙漠/方山非零，其它图写 0 是空操作。写入时机选 LateUpdate 的依据：`DayNightManager` 的三处写入分别在 `Awake`、`Update`（`UpdateCycle:416-421`）与 `blendRoutine` 协程（:205-228），协程恢复点在 Update 之后、LateUpdate 之前，所以 LateUpdate 必为该帧最后写者，无需 Harmony；游戏里另两个 LateUpdate 全局量写入者（`LavaPost`、`StormVisual`）写的是别的属性名，不冲突。关闭时把最后见到的非零值写回（profile 的静态项只在段落混合期写，不写回会一直停在 0）。 |
 
 `GraphicsDisableMsaa` 是这一组里最值钱的项，也是唯一「关掉反而更清晰」的项：本构建 MSAA 与 STP 上采样互斥（`IsSTPEnabled` 依赖 `IsTemporalAAEnabled`，后者要求 `msaaSamples == 1`，`UniversalCameraData.cs:390-416`），而游戏默认档是 `renderScale = 0.8` + `upscalingFilter = STP`（`RenderScaleSetting.cs:19-55`）。日志里反复出现的 `Disabling TAA and STP because MSAA is on` 就是这个矛盾：现在等于 MSAA 全价照付，同时 0.8 分辨率退化成普通双线性拉伸（`RenderFinalPassRenderGraph` 里 STP 分支根本没有 case）。把 MSAA 关掉即省下 MSAA 成本，又让 STP 真正做它该做的上采样。
 
 这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项**。MSAA 与每顶点骨骼数在 `Assembly-CSharp` 里都没有对应设置类（全仓检索抗锯齿/TAA/MSAA 只命中 `MirrorCameraScript.cs:60`），玩家无从调整，所以由补丁接管。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
+
+`SuppressHeatHaze` 同样符合这条原则：全屏热浪扭曲没有任何游戏设置能关。安全性依据是它**纯视觉**——全仓检索 `_GlobalHazeAmount` 的 C# 读取只有 `DayNightManager.HazeDebug` 一处赋值（`:288`），而该字段在整个反编译全集里没有任何消费者，其余全部消费在 shader 内。代价明确且只在方山可见：热浪 shimmer 消失。这是研究报告判定的方山主因 A（Desert 渲染管线底座的全屏效果）中唯一能从代码侧直接消除的一项。
 
 ## 本轮修复的问题（变更说明）
 
@@ -224,6 +225,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Graphics.GraphicsBudgetEnabled` | `true` | 画质上限车道总开关；关闭即回滚本车道写过的值。 |
 | `Graphics.GraphicsDisableMsaa` | `true` | 关 MSAA 让 STP 生效（详见上文）。 |
 | `Graphics.GraphicsSkinWeightCap` | `2` | `QualitySettings.skinWeights` 上限（1/2/4/255）；其它值表示不限制。每顶点骨骼数直接随屏幕上的角色数放大。 |
+| `Graphics.SuppressHeatHaze` | `true` | 每 LateUpdate 把 `_GlobalHazeAmount` 写 0，消除方山全屏热浪扭曲；关闭时写回最后见到的非零值。 |
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
 
@@ -253,6 +255,5 @@ dotnet build -c Release
 - 本轮 5 项新补丁与 2 条非 Harmony 车道全部**未经游戏内验证**。其中两项有明确的观感/行为代价需要亲眼确认：`RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）与 `Graphics.GraphicsDisableMsaa`（AA 由 MSAA 换成 TAA/STP）。
 - `CollisionCallbackReuse` 是**引擎全局标志**。游戏侧唯一的跨帧 `Collision` 引用已定位并加守卫，已装的 20 个模组 DLL 元数据里也没有任何 `OnCollisionEnter/Stay/Exit`（除 MMHOOK 自动生成的 hook 库），但第三方模组仍是唯一无法静态穷尽的面。装机后滚一颗雪球确认它还能变大即可覆盖这条路径。
 - 长序列 IL 模式在多模组预处理环境不可靠；后续新增补丁优先窄 Prefix + 精确结构验证。
-- `BugleClipGuard` 只保护 `BugleSFX.Update` 的 clip 索引路径；`RPC_SetSongByName` 不在修复范围。
 - 热重载对 Prefix 补丁较安全，但唯一 Transpiler（`BreakableBridge`）存在 IL 反向应用的残余风险，切换后如有异常请重启确认。
 - 遇到崩溃、存档/网络/场景切换/物品/物理/渲染异常，立即关闭最近启用的单项并保留完整日志。测试步骤见 [TESTING.md](TESTING.md)。
