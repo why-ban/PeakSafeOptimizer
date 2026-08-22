@@ -24,7 +24,7 @@ namespace PeakSafeOptimizer
         private LifecycleRegistry _lifecycle;
         private OptimizerConfig _settings;
         private PatchInstaller _installer;
-        private GraphicsBudget _graphicsBudget;
+        private BoneWeightCap _boneWeightCap;
         private CollisionCallbackReuse _collisionReuse;
         private int _mainThreadId;
         private readonly ConcurrentQueue<PatchId> _pendingSettingChanges = new ConcurrentQueue<PatchId>();
@@ -53,7 +53,7 @@ namespace PeakSafeOptimizer
                     Logger.LogInfo(line);
 
                 // Non-Harmony lanes, both driven from Update and both restoring what they found.
-                _graphicsBudget = new GraphicsBudget(Logger);
+                _boneWeightCap = new BoneWeightCap(Logger);
                 _collisionReuse = new CollisionCallbackReuse(Logger);
                 _collisionReuse.Evaluate(_installer);
 
@@ -136,7 +136,7 @@ namespace PeakSafeOptimizer
             while (_pendingSettingChanges.TryDequeue(out PatchId id))
                 ApplySettingChange(id);
 
-            _graphicsBudget?.Update(Time.unscaledDeltaTime);
+            _boneWeightCap?.Update(Time.unscaledDeltaTime);
             // Both non-Harmony lanes are polled rather than event driven. Their config entries are not
             // patch toggles, so BepInEx' SettingChanged path (which may fire off the main thread)
             // deliberately ignores them; polling makes hot reload work for them without a second queue.
@@ -242,13 +242,13 @@ namespace PeakSafeOptimizer
 
             try
             {
-                _graphicsBudget?.Shutdown();
+                _boneWeightCap?.Shutdown();
             }
             catch (Exception ex)
             {
-                Logger.LogError($"Graphics budget shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
+                Logger.LogError($"Bone weight cap shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
             }
-            _graphicsBudget = null;
+            _boneWeightCap = null;
         }
 
         private void DisposeLifecycle(string phase)

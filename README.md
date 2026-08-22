@@ -63,7 +63,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 **默认值策略**：只有**行为等价**（结果与原版逐位相同）或**修复原版故障**的补丁默认开启。任何用观感、手感或动画精度换帧数的项一律默认关闭——那个取舍属于安装者，不属于模组。
 
-默认关闭的项：`Experimental.RemoteRagdollLod`（一个开关 = 4 个补丁，远距姿态凝固）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）、`Graphics.GraphicsSkinWeightCap`（关节形变变糙）、`Experimental.CollisionCallbackReuse`（进程级引擎标志）。
+默认关闭的项：`Experimental.RemoteRagdollLod`（一个开关 = 4 个补丁，远距姿态凝固）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）、`Graphics.CapBoneWeights`（关节形变变糙）、`Experimental.CollisionCallbackReuse`（进程级引擎标志）。
 
 **必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 41 个补丁对应 37 个开关。
 
@@ -159,7 +159,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | 配置键 | 默认 | 作用与回滚 |
 |---|---:|---|
 | `Experimental.CollisionCallbackReuse` | `false` | 置 `Physics.reuseCollisionCallbacks = true`。默认 false 时引擎对**每次上报的碰撞**都先分配一个 `Collision` 对象加一个 `ContactPoint[]`（`Collision.cs:87-94` 构造函数里就填好，回调看不看 contacts 都付钱），而每个接触对的两侧各派发一次（`Physics.cs:1440-1454`）——聚集的布娃娃正是这个量最大的场景。仅当上面两个 Snowball 守卫都安装成功才会开启，任一未装立即写回原值；退出时也写回。 |
-| `Graphics.*` | `true`（但其下唯一的上限默认关闭） | 对 `QualitySettings` 的**单向 min() 上限**，只覆盖游戏画质菜单**没有提供**的项。目前只剩 `GraphicsSkinWeightCap`（每顶点骨骼数），**默认 0 = 不限制**。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
+| `Graphics.CapBoneWeights` | `false` | 把 `QualitySettings.skinWeights` 限制到每顶点 2 根骨骼——游戏画质菜单没有这一项，而每顶点骨骼数是每个蒙皮角色的逐顶点成本，随屏幕上的人数放大。只降不升（已经 ≤2 就不写）。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到玩家没选过的值），之后每 2 秒重申一次。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时写回启动值。默认关闭：肩/髋关节形变会略糙。 |
 
 这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项，且不默认改变画面**。每顶点骨骼数在 `Assembly-CSharp` 里没有对应设置类，玩家无从调整，所以由补丁提供开关——但默认关闭，因为降低骨骼权重会让关节处的形变变糙。曾经这里还有一项强制关闭 MSAA（游戏同样没有抗锯齿设置），已移除：关抗锯齿是画面决定，应该由玩家做。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
 
@@ -210,20 +210,10 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | 配置键 | 默认 | 含义 |
 |---|---:|---|
 | `Diagnostics.DetailedLogging` | `true` | 每个修复原因首次命中输出一次，之后按原因最多每 30 秒聚合一次。任何情况都不逐帧输出。 |
-| `Experimental.ExplosionPointCount` | `3` | `ExplosionScale` 的基础 `explosionPointCount` 上限（原版 4）；集群与距离判定可继续降低。 |
-| `Experimental.ExplosionSubPointCount` | `1` | `ExplosionScale` 的基础 `subExplosionPointCount` 上限（原版 2）；集群与距离判定可继续降低。 |
-| `Experimental.ExplosionClusterWindowSeconds` | `1.2` | 爆炸集群检测时间窗。 |
-| `Experimental.ExplosionClusterRadius` | `3.5` | 爆炸集群检测半径。 |
-| `Experimental.ExplosionNearDistance` | `50` | 从该距离开始进入远距 2 球上限。 |
-| `Experimental.ExplosionFarDistance` | `120` | 从该距离开始仅保留中心球。 |
-| `Experimental.RemoteRagdollLodEnterDistance` | `60` | 远端角色进入被动 ragdoll 层级的距离。 |
-| `Experimental.RemoteRagdollLodExitDistance` | `50` | 远端角色恢复完整行为的距离。 |
-| `Experimental.DetailBodypartThrottleInterval` | `3` | 远端细节部件每 N 个物理 tick 执行一次 Animate；1 为不降频，运行时最大钳制到 10。 |
-| `Experimental.TumbleWeedTargetScanInterval` | `5` | 风滚草每 N 个物理 tick 重解一次追踪目标；1 为每 tick 重扫，运行时最大钳制到 10。 |
-| `Experimental.RemoteClusterAnimationInterval` | `2` | 远端玩家动画图每 N 个物理 tick 求值一次（传累计 dt，动画速度不变）；1 为每 tick，运行时最大钳制到 4。 |
-| `Experimental.CollisionCallbackReuse` | `false` | 见上文非 Harmony 车道；需两个 Snowball 守卫都安装成功。 |
-| `Graphics.GraphicsBudgetEnabled` | `true` | 画质上限车道总开关；关闭即回滚本车道写过的值。 |
-| `Graphics.GraphicsSkinWeightCap` | `0`（不限制） | `QualitySettings.skinWeights` 上限（1/2/4/255）；其它值（含默认 0）表示不限制。每顶点骨骼数直接随屏幕上的角色数放大，想换帧数设为 `2`；默认关闭因为它会让关节形变变糙。 |
+| `Experimental.CollisionCallbackReuse` | `false` | 见上文非 Harmony 车道；需 `Fixes.SnowballContactGuard` 的两个补丁都安装成功。 |
+| `Graphics.CapBoneWeights` | `false` | 把 `QualitySettings.skinWeights` 限制到每顶点 2 根骨骼。只降不升，关闭时写回启动值。代价：肩/髋关节形变略糙。 |
+
+**配置里没有任何需要手填的数值。** 所有阈值（爆炸球数与集群/距离分档、远端 LOD 的进出距离、三个降频间隔、骨骼权重档位）都是代码里的命名常量，紧挨着论证它们的注释。理由很简单：配置文件里的一个数字，使用者无法验证它是否合理，而错误的值会安静地产生错误的行为——例如把降频间隔调到 10，远端角色就不再是「动画略顿」而是「明显坏了」。要改这些值应该改代码并重新论证，不是在 cfg 里试。
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
 
@@ -232,8 +222,8 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 ### 热重载
 
 - 布尔补丁开关（`Fixes.*` 与 `Experimental.*` 中**已注册**的项）支持运行时热重载：在 BepInEx ConfigurationManager 里改值后立即 install/uninstall，无需重启。
-- 诊断开关和数值型配置（爆炸、远距 LOD、细节部件间隔）由运行时代码读取 `.Value`，修改后即时生效，无需 Harmony install/uninstall。
-- **两条非 Harmony 车道的热重载走轮询而非事件**：`Graphics.*` 与 `Experimental.CollisionCallbackReuse` 不是补丁开关，`ConfigFile.SettingChanged` 路径（可能在非主线程触发）刻意忽略它们；`Plugin.Update` 每帧各调一次它们的 `Update`/`Evaluate`，两者都幂等且在配置未变时只做一次配置读 + 早退。因此改值后 `Graphics.*` 最迟 2 秒生效（重申周期），`CollisionCallbackReuse` 下一帧生效。**关闭时会主动写回快照**：单独关 `GraphicsDisableMsaa` 或把 `GraphicsSkinWeightCap` 设为非法值也会各自还原，不需要整体关掉车道再打开。
+- 诊断开关由运行时代码读取 `.Value`，修改后即时生效，无需 Harmony install/uninstall。
+- **两条非 Harmony 车道的热重载走轮询而非事件**：`Graphics.CapBoneWeights` 与 `Experimental.CollisionCallbackReuse` 不是补丁开关，`ConfigFile.SettingChanged` 路径（可能在非主线程触发）刻意忽略它们；`Plugin.Update` 每帧各调一次它们的 `Update`/`Evaluate`，两者都幂等且在配置未变时只做一次配置读 + 早退。因此 `CapBoneWeights` 改值后最迟 2 秒生效（重申周期），`CollisionCallbackReuse` 下一帧生效，**关闭时都会写回启动值**。
 - 热切换在日志输出 `HotReload:` 一行，例如 `HotReload: <名称> enabled→installed` / `disabled→uninstalled`，失败或跳过则带 `Skipped*`/`Failed*` 与原因。每项切换独立隔离，失败只影响该项。
 
 ## 构建与安装
@@ -250,7 +240,7 @@ dotnet build -c Release
 
 - 完成的是构建、结构验证与严格 IL 自检；**多人压力基准、长时稳定性与性能基准仍未完成**，不给帧率数值承诺。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未完成游戏内验证；若目标构建结构不符会各自 fail-closed 单独跳过，不影响其余补丁。
-- 有观感/行为代价的项已全部改为**默认关闭**，需要自行开启并亲眼确认：6 项远端动画降频（`RemoteClusterAnimationThrottle`、`DetailBodypartThrottle`、4 项 `RemoteRagdollLod*`）、`Graphics.GraphicsSkinWeightCap`，以及全局引擎标志 `Experimental.CollisionCallbackReuse`。
+- 有观感/行为代价的项已全部改为**默认关闭**，需要自行开启并亲眼确认：6 项远端动画降频（`RemoteClusterAnimationThrottle`、`DetailBodypartThrottle`、`RemoteRagdollLod` 一个开关下的 4 项）、`Graphics.CapBoneWeights`，以及全局引擎标志 `Experimental.CollisionCallbackReuse`。
 - `CollisionCallbackReuse` 是**引擎全局标志**。游戏侧唯一的跨帧 `Collision` 引用已定位并加守卫，已装的 20 个模组 DLL 元数据里也没有任何 `OnCollisionEnter/Stay/Exit`（除 MMHOOK 自动生成的 hook 库），但第三方模组仍是唯一无法静态穷尽的面。装机后滚一颗雪球确认它还能变大即可覆盖这条路径。
 - 长序列 IL 模式在多模组预处理环境不可靠；后续新增补丁优先窄 Prefix + 精确结构验证。
 - 遇到崩溃、存档/网络/场景切换/物品/物理/渲染异常，立即关闭最近启用的单项并保留完整日志。测试步骤见 [TESTING.md](TESTING.md)。

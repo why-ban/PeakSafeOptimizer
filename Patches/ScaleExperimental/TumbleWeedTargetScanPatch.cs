@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using BepInEx.Configuration;
 using HarmonyLib;
 using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Diagnostics;
@@ -41,8 +40,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// </summary>
     internal static class TumbleWeedTargetScanPatch
     {
-        private const int DefaultInterval = 5;
-        private const int MaxInterval = 10;
+        /// <summary>
+        /// A tumbleweed re-solves its chase target once every this many physics ticks and reuses the
+        /// previous one in between. Force is still applied every tick, and its direction is recomputed
+        /// from the cached target's current Center, so 5 ticks (0.1s) costs no visible responsiveness.
+        /// </summary>
+        private const int Interval = 5;
         private const float MaxScanDistance = 300f;
         private const string RigidbodyTypeName = "UnityEngine.Rigidbody";
 
@@ -151,10 +154,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
-            int interval = ResolveInterval();
-            if (interval <= 1)
-                return true;
-
             PhotonView view = photonViewRef(__instance);
             if (view == null)
             {
@@ -183,7 +182,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // target that is gone / destroyed / dead. Everything else reuses the cached target and
             // still recomputes the direction from its current Center, so steering stays continuous.
             bool rescan = state.LastScanTick == int.MinValue ||
-                tick - state.LastScanTick >= interval ||
+                tick - state.LastScanTick >= Interval ||
                 tick < state.LastScanTick;
             if (!rescan && state.HasTarget)
             {
@@ -244,15 +243,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             }
             target = best;
             return true;
-        }
-
-        private static int ResolveInterval()
-        {
-            ConfigEntry<int> entry = OptimizerConfig.TumbleWeedTargetScanInterval;
-            int interval = entry != null ? entry.Value : DefaultInterval;
-            if (interval <= 1)
-                return 1;
-            return interval > MaxInterval ? MaxInterval : interval;
         }
 
         private static Type ResolveForceModeType(Type rigidbodyType)

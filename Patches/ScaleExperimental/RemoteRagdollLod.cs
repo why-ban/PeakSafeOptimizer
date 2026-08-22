@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using BepInEx.Configuration;
 using HarmonyLib;
 using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Diagnostics;
@@ -47,9 +46,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         internal const int TierFull = 0;
         internal const int TierPassiveRagdoll = 2;
 
-        private const float DefaultEnterDistance = 60f;
-        private const float DefaultExitDistance = 50f;
-        private const float FallbackExitRatio = 0.83f;
+        /// <summary>
+        /// Distance hysteresis: a remote character enters the passive tier at or beyond
+        /// <see cref="EnterDistance"/> and returns to full behaviour below <see cref="ExitDistance"/>.
+        /// The gap is what stops the tier oscillating every frame for someone walking the boundary.
+        /// 60m is past the range where a frozen pose reads as wrong.
+        /// </summary>
+        private const float EnterDistance = 60f;
+        private const float ExitDistance = 50f;
         private const float FullRagdollControlThreshold = 0.9f;
         /// <summary>
         /// Frames a character must be seen at full behaviour before it may be downgraded for the
@@ -308,10 +312,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (float.IsNaN(distance))
                 return false;
 
-            ResolveThresholds(out float enter, out float exit);
             // Hysteresis: entering the passive tier needs distance >= enter, leaving it needs
-            // distance < exit, and exit is always strictly below enter (see ResolveThresholds).
-            return tier == TierPassiveRagdoll ? !(distance < exit) : distance >= enter;
+            // distance < exit, and ExitDistance is strictly below EnterDistance.
+            return tier == TierPassiveRagdoll ? !(distance < ExitDistance) : distance >= EnterDistance;
         }
 
         /// <summary>
@@ -387,27 +390,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
             center = torsoTransform.position;
             return true;
-        }
-
-        /// <summary>
-        /// Hysteresis thresholds with robustness against a misconfigured pair: a non-positive or NaN
-        /// enter distance restores both defaults, and an exit distance that is not strictly below the
-        /// enter distance is forced to enter * 0.83 so the tier can never oscillate every frame.
-        /// </summary>
-        private static void ResolveThresholds(out float enter, out float exit)
-        {
-            ConfigEntry<float> enterEntry = OptimizerConfig.RemoteRagdollLodEnterDistance;
-            ConfigEntry<float> exitEntry = OptimizerConfig.RemoteRagdollLodExitDistance;
-            enter = enterEntry != null ? enterEntry.Value : DefaultEnterDistance;
-            exit = exitEntry != null ? exitEntry.Value : DefaultExitDistance;
-            if (!(enter > 0f))
-            {
-                enter = DefaultEnterDistance;
-                exit = DefaultExitDistance;
-                return;
-            }
-            if (!(exit > 0f) || !(exit < enter))
-                exit = enter * FallbackExitRatio;
         }
 
         /// <summary>

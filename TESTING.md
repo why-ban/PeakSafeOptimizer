@@ -49,7 +49,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 1. 进游戏后，在 ConfigurationManager 里把一个默认开启的 Prefix 补丁（例如 `Fixes.ItemCollisionMode`）关掉再打开。
 2. 观察日志：应出现 `HotReload: ItemCollisionMode disabled→uninstalled` 与 `HotReload: ItemCollisionMode enabled→installed`。
 3. 把另一个默认开启的 `Experimental.*` 补丁（例如 `Experimental.ExplosionScale`）关掉再打开，观察同格式两行。
-6. 值类型配置（`Diagnostics.DetailedLogging`、爆炸集群/距离参数、远端 LOD 距离、`DetailBodypartThrottleInterval`）改值后即时生效，无需热重载动作。
+6. `Diagnostics.DetailedLogging` 改值后即时生效，无需重载或重启。配置里已没有任何数值项——所有阈值都是代码常量。
 
 ## 1. 立即停止的恶性判据
 
@@ -118,12 +118,12 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 | 步骤 | 项 | 场景 | 通过条件 |
 |---|---|---|---|
-| E1 | `Experimental.RemoteClusterAnimationThrottle`（默认关闭，需手动开启） | 2 人近距互看：站立、走动、跳跃、蹲下、挥手表情、切换手持物品、抓取互拉、倒地 | 远端角色动画略微「一顿一顿」是预期（25Hz），但**动作速度必须与原版相同**（不能变慢也不能变快）；四肢不瘫软、不漂浮；持物手部位置正常；切换物品瞬间不出现姿态错乱。任一条不满足就把 `RemoteClusterAnimationInterval` 设回 `1`（等于关闭）而不是继续调大。 |
+| E1 | `Experimental.RemoteClusterAnimationThrottle`（默认关闭，需手动开启） | 2 人近距互看：站立、走动、跳跃、蹲下、挥手表情、切换手持物品、抓取互拉、倒地 | 远端角色动画略微「一顿一顿」是预期（25Hz），但**动作速度必须与原版相同**（不能变慢也不能变快）；四肢不瘫软、不漂浮；持物手部位置正常；切换物品瞬间不出现姿态错乱。任一条不满足就把这一项关掉。 |
 | E2 | 同上 | 8 人聚集 2 分钟，其中夹杂表情、抓取、装备切换、倒地 | 与 E1 相同判据；同时记录帧时间与该项关闭时的对比。fallback 命中的人（被抓、攀爬、观战中）应看不出任何差别。 |
 | E3 | `Fixes.BodypartMovementForceIdentity`（默认开启） | 全员站立不动 → 同时开始移动 → 冲刺 → 停下 | 起步/停下手感与原版一致，无延迟感；站立时无异常抖动。 |
 | E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse`（后者默认关闭，需手动开启才测这一步） | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
 | E5 | `Fixes.SnowballContactGuard`（一个开关，两个补丁） | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
-| E6 | `Graphics.GraphicsSkinWeightCap`（默认 0 = 不限制，需手动设为 `2` 才测这一步） | 8 人聚集观察角色关节（肩、肘、髋）形变 | 日志出现一行 `graphics budget snapshot: skinWeights=<你的启动值>`；设为 `2` 后关节处形变会略微变糙（这是代价），改回 `0` 或把 `GraphicsBudgetEnabled` 设 `false` 应立刻还原。 |
+| E6 | `Graphics.CapBoneWeights`（默认关闭，需手动开启） | 8 人聚集观察角色关节（肩、肘、髋）形变 | 日志出现一行 `bone weight cap: launch value was <你的启动值>`；开启后关节处形变会略微变糙（这是代价），关掉应在 2 秒内还原。 |
 
 ### 2.5 组合长时
 

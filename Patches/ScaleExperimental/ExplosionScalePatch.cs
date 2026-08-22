@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using BepInEx.Configuration;
 using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
@@ -59,11 +58,24 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private const int RingCapacity = 16;
         private const int ClusterLightNeighbours = 2;
         private const int ClusterHeavyNeighbours = 5;
-        private const float DefaultClusterWindowSeconds = 1.2f;
-        private const float DefaultClusterRadius = 3.5f;
-        private const float DefaultNearDistance = 50f;
-        private const float DefaultFarDistance = 120f;
-        private const float FallbackFarRatio = 2f;
+
+        /// <summary>
+        /// Base caps applied to every explosion. Vanilla is 4 / 2, i.e.
+        /// 1 + 4 + 2 * 4 = 13 orbs; 3 / 1 gives 1 + 3 + 1 * 3 = 7.
+        /// </summary>
+        private const int PointCap = 3;
+        private const int SubPointCap = 1;
+
+        /// <summary>Two explosions count as clustered within this time and distance of each other.</summary>
+        private const float ClusterWindowSeconds = 1.2f;
+        private const float ClusterRadius = 3.5f;
+
+        /// <summary>
+        /// Distance tiers measured from the local viewpoint: below Near nothing extra is dropped,
+        /// between Near and Far only the centre orb plus one ring remains, beyond Far only the centre.
+        /// </summary>
+        private const float NearDistance = 50f;
+        private const float FarDistance = 120f;
 
         /// <summary>
         /// Ring buffer of recent explosion origins. Both arrays are allocated once at type
@@ -140,14 +152,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 _clusterSceneHandle = sceneHandle;
             }
 
-            ConfigEntry<int> pointCapEntry = OptimizerConfig.ExplosionPointCount;
-            ConfigEntry<int> subPointCapEntry = OptimizerConfig.ExplosionSubPointCount;
-            if (pointCapEntry == null || subPointCapEntry == null)
-            {
-                RateLimitedDiagnostics.Hit("ExplosionScale.config-unavailable");
-                return true;
-            }
-
             int currentPointCount = __instance.explosionPointCount;
             int currentSubPointCount = __instance.subExplosionPointCount;
             if (currentPointCount < 0 || currentSubPointCount < 0)
@@ -158,8 +162,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
-            int pointCap = pointCapEntry.Value;
-            int subPointCap = subPointCapEntry.Value;
+            int pointCap = PointCap;
+            int subPointCap = SubPointCap;
 
             Vector3 position = __instance.transform.position;
             float now = Time.time;
@@ -179,15 +183,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             if (TryGetViewpoint(out Vector3 viewpoint))
             {
-                ResolveDistances(out float near, out float far);
                 float distanceSqr = (position - viewpoint).sqrMagnitude;
                 // NaN coordinates make both comparisons false, which means "no distance tier".
-                if (distanceSqr >= far * far)
+                if (distanceSqr >= FarDistance * FarDistance)
                 {
                     pointCap = Math.Min(pointCap, 0);
                     subPointCap = Math.Min(subPointCap, 0);
                 }
-                else if (distanceSqr >= near * near)
+                else if (distanceSqr >= NearDistance * NearDistance)
                 {
                     pointCap = Math.Min(pointCap, 1);
                     subPointCap = Math.Min(subPointCap, 0);
@@ -216,13 +219,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// </summary>
         private static int CountClusterNeighbours(Vector3 position, float now)
         {
-            ResolveClusterWindow(out float window, out float radius);
-            float radiusSqr = radius * radius;
+            const float radiusSqr = ClusterRadius * ClusterRadius;
             int count = 0;
             for (int i = 0; i < RingCapacity; i++)
             {
                 float stamp = _clusterTimes[i];
-                if (stamp > now || now - stamp > window)
+                if (stamp > now || now - stamp > ClusterWindowSeconds)
                     continue;
                 if ((_clusterPositions[i] - position).sqrMagnitude <= radiusSqr)
                     count++;
@@ -271,39 +273,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
             viewpoint = torsoTransform.position;
             return true;
-        }
-
-        /// <summary>
-        /// Cluster thresholds with runtime robustness: a non-positive or NaN value (both fail the
-        /// positive test) restores the shipped default for that entry alone.
-        /// </summary>
-        private static void ResolveClusterWindow(out float window, out float radius)
-        {
-            ConfigEntry<float> windowEntry = OptimizerConfig.ExplosionClusterWindowSeconds;
-            ConfigEntry<float> radiusEntry = OptimizerConfig.ExplosionClusterRadius;
-            window = windowEntry != null ? windowEntry.Value : DefaultClusterWindowSeconds;
-            radius = radiusEntry != null ? radiusEntry.Value : DefaultClusterRadius;
-            if (!(window > 0f))
-                window = DefaultClusterWindowSeconds;
-            if (!(radius > 0f))
-                radius = DefaultClusterRadius;
-        }
-
-        /// <summary>
-        /// Distance thresholds with the same robustness, plus the ordering invariant: a far distance
-        /// that is not strictly above the near distance is forced to near * 2, so the two tiers can
-        /// never overlap or invert.
-        /// </summary>
-        private static void ResolveDistances(out float near, out float far)
-        {
-            ConfigEntry<float> nearEntry = OptimizerConfig.ExplosionNearDistance;
-            ConfigEntry<float> farEntry = OptimizerConfig.ExplosionFarDistance;
-            near = nearEntry != null ? nearEntry.Value : DefaultNearDistance;
-            far = farEntry != null ? farEntry.Value : DefaultFarDistance;
-            if (!(near > 0f))
-                near = DefaultNearDistance;
-            if (!(far > near))
-                far = near * FallbackFarRatio;
         }
 
         private static float[] CreateEmptyTimes()

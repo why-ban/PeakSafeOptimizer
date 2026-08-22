@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using BepInEx.Configuration;
 using HarmonyLib;
 using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Diagnostics;
@@ -69,12 +68,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// </summary>
     internal static class RemoteClusterAnimationThrottlePatch
     {
-        private const int DefaultInterval = 2;
         /// <summary>
-        /// Upper clamp. Beyond this the stepping stops reading as a low frame rate animation and
-        /// starts reading as a broken one, which is not a trade this patch offers.
+        /// The animation graph is evaluated once every this many physics ticks, i.e. at 50/Interval Hz.
+        /// 2 halves the work while still stepping at 25Hz; beyond 2 the stepping stops reading as a low
+        /// frame rate animation and starts reading as a broken one, which is not a trade this patch
+        /// offers.
         /// </summary>
-        private const int MaxInterval = 4;
+        private const int Interval = 2;
 
         private sealed class State
         {
@@ -194,10 +194,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
-            int interval = ResolveInterval();
-            if (interval <= 1)
-                return true;
-
             // The original's own first-frame branch also initialises firstFrame; leave it alone.
             if (firstFrameRef(__instance))
                 return Yield(states, __instance);
@@ -231,12 +227,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 state.PendingDeltaTime = 0f;
             state.LastTick = tick;
             // Clamped so a long stall cannot hand the graph one huge step.
-            state.PendingDeltaTime = Mathf.Min(state.PendingDeltaTime + deltaTime, deltaTime * MaxInterval);
+            state.PendingDeltaTime = Mathf.Min(state.PendingDeltaTime + deltaTime, deltaTime * Interval);
 
             // Per-instance phase so remote characters do not all evaluate on the same tick, which
             // would trade a flat cost for a periodic spike.
-            int phase = Math.Abs(__instance.GetInstanceID() % interval);
-            bool evaluate = (tick + phase) % interval == 0;
+            int phase = Math.Abs(__instance.GetInstanceID() % Interval);
+            bool evaluate = (tick + phase) % Interval == 0;
             if (!evaluate)
             {
                 // Everything the original does unconditionally on a tick without an evaluation.
@@ -319,19 +315,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     }
                 }
             }
-        }
-
-        /// <summary>
-        /// Runtime robustness for a hand-edited config: 1 or less disables the throttle entirely and
-        /// anything above <see cref="MaxInterval"/> is clamped.
-        /// </summary>
-        private static int ResolveInterval()
-        {
-            ConfigEntry<int> entry = OptimizerConfig.RemoteClusterAnimationInterval;
-            int interval = entry != null ? entry.Value : DefaultInterval;
-            if (interval <= 1)
-                return 1;
-            return interval > MaxInterval ? MaxInterval : interval;
         }
 
         /// <summary>

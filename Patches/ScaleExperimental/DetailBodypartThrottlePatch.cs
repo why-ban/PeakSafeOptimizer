@@ -1,7 +1,6 @@
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using BepInEx.Configuration;
 using HarmonyLib;
 using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Patches.Scale;
@@ -51,12 +50,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// </summary>
     internal static class DetailBodypartThrottlePatch
     {
-        private const int DefaultInterval = 3;
         /// <summary>
-        /// Upper clamp for the configured interval. A larger value would leave fingers and jaws
-        /// visibly frozen instead of merely lagging, which is not a trade this patch offers.
+        /// Animate runs once every this many physics ticks for a detail part. 3 keeps fingers and jaws
+        /// moving at ~16Hz, which reads as slightly soft rather than frozen; higher values start to
+        /// look broken, which is not a trade this patch offers.
         /// </summary>
-        private const int MaxInterval = 10;
+        private const int Interval = 3;
         private const float FullRagdollControlThreshold = 0.9f;
         /// <summary>
         /// Recency window that keeps a character unthrottled around an item equip, where
@@ -211,10 +210,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (table == null || partTypeRef == null || __instance == null)
                 return true;
 
-            int interval = ResolveInterval();
-            if (interval <= 1)
-                return true;
-
             int index = (int)partTypeRef(__instance);
             if ((uint)index >= (uint)table.Length || !table[index])
                 return true;
@@ -223,12 +218,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // same frame, which would trade a flat cost for a periodic spike. GetInstanceID is
             // stable for the lifetime of the part; the modulo is taken before Math.Abs so
             // int.MinValue cannot overflow it.
-            int phase = Math.Abs(__instance.GetInstanceID() % interval);
+            int phase = Math.Abs(__instance.GetInstanceID() % Interval);
             // Use the physics tick rather than Time.frameCount. When Unity runs multiple physics
             // steps inside one rendered frame, each step gets its own deterministic decision instead
             // of creating consecutive runs and consecutive gaps.
             int physicsTick = Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
-            if ((physicsTick + phase) % interval == 0)
+            if ((physicsTick + phase) % Interval == 0)
                 return true;
 
             AccessTools.FieldRef<Bodypart, Character> characterRef = _bodypartCharacter;
@@ -240,19 +235,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (owner == null)
                 return true;
             return !ShouldThrottle(owner);
-        }
-
-        /// <summary>
-        /// Runtime robustness for a hand-edited config: 1 or less disables the throttle entirely and
-        /// anything above <see cref="MaxInterval"/> is clamped, so no value can freeze a detail part.
-        /// </summary>
-        private static int ResolveInterval()
-        {
-            ConfigEntry<int> entry = OptimizerConfig.DetailBodypartThrottleInterval;
-            int interval = entry != null ? entry.Value : DefaultInterval;
-            if (interval <= 1)
-                return 1;
-            return interval > MaxInterval ? MaxInterval : interval;
         }
 
         private static bool ShouldThrottle(Character c)

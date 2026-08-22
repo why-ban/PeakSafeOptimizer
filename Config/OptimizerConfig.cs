@@ -163,53 +163,11 @@ namespace PeakSafeOptimizer.Config
 
         public ConfigEntry<bool> DetailedDiagnostics { get; }
 
-        // Cross-cutting value configuration consumed by the ExplosionScale patch. Stored statically
-        // because PatchDefinition.Initialize has no ConfigFile/instance parameter.
-        internal static ConfigEntry<int> ExplosionPointCount;
-        internal static ConfigEntry<int> ExplosionSubPointCount;
-
-        // Cluster tier: an explosion counts as clustered when other explosions happened within
-        // ExplosionClusterWindowSeconds and ExplosionClusterRadius of it. Read at runtime by
-        // Patches\ScaleExperimental\ExplosionScalePatch, which falls back to its own defaults for a
-        // non-positive or NaN value.
-        internal static ConfigEntry<float> ExplosionClusterWindowSeconds;
-        internal static ConfigEntry<float> ExplosionClusterRadius;
-
-        // Distance tier for the same patch: below Near nothing extra is dropped, between Near and
-        // Far the orb count is capped at 2, beyond Far only the always-present centre orb remains.
-        internal static ConfigEntry<float> ExplosionNearDistance;
-        internal static ConfigEntry<float> ExplosionFarDistance;
-
-        // Distance hysteresis for the RemoteRagdollLod entries. Read at runtime by
-        // Patches\ScaleExperimental\RemoteRagdollLod, which forces Exit below Enter if the pair is
-        // misconfigured, so a bad combination cannot make the tier oscillate every frame.
-        internal static ConfigEntry<float> RemoteRagdollLodEnterDistance;
-        internal static ConfigEntry<float> RemoteRagdollLodExitDistance;
-
-        // Throttle interval for the DetailBodypartThrottle entry. Read at runtime by
-        // Patches\ScaleExperimental\DetailBodypartThrottlePatch, which treats 1 or less as "no
-        // throttling" and clamps anything above 10, so no value can freeze a detail part.
-        internal static ConfigEntry<int> DetailBodypartThrottleInterval;
-
-        // Rescan interval for the TumbleWeedTargetScan entry. Read at runtime by
-        // Patches\ScaleExperimental\TumbleWeedTargetScanPatch, which treats 1 or less as "rescan
-        // every tick" and clamps anything above 10.
-        internal static ConfigEntry<int> TumbleWeedTargetScanInterval;
-
-        // Evaluation interval for the RemoteClusterAnimationThrottle entry. Read at runtime by
-        // Patches\ScaleExperimental\RemoteClusterAnimationThrottlePatch, which treats 1 or less as
-        // "evaluate every tick" and clamps anything above 4.
-        internal static ConfigEntry<int> RemoteClusterAnimationInterval;
-
-        // Graphics budget (non-Harmony lane, see Graphics\GraphicsBudget). Every write is a
-        // one-directional min(): a value that is already cheaper than the cap is left alone, and the
-        // launch snapshot is restored on shutdown or when the lane is disabled.
-        //
-        // Only knobs the game does not expose belong here. Shadow distance and cascade count were
-        // capped here and have been removed: the game has a Shadow Distance setting that writes both,
-        // so capping them overrode a choice the player had already made.
-        internal static ConfigEntry<bool> GraphicsBudgetEnabled;
-        internal static ConfigEntry<int> GraphicsSkinWeightCap;
+        // Non-Harmony lanes. Both are switches: every tuning value they used to expose is now a named
+        // constant next to the code that reasons about it, because a number in a config file is a
+        // number nobody can validate. Stored statically because PatchDefinition.Initialize has no
+        // ConfigFile/instance parameter.
+        internal static ConfigEntry<bool> GraphicsCapBoneWeights;
 
         /// <summary>
         /// True when the collision-callback reuse flag may be flipped. Plugin only applies it after
@@ -325,39 +283,6 @@ namespace PeakSafeOptimizer.Config
                 PatchId.SnowballContactSnapshot,
                 PatchId.SnowballContactConsume);
 
-            ExplosionPointCount = config.Bind("Experimental", "ExplosionPointCount", 3,
-                "Upper bound for explosionPointCount when ExplosionScale is enabled. Vanilla is 4, " +
-                "which together with the vanilla subExplosionPointCount of 2 spawns " +
-                "1 + 4 + 2 * 4 = 13 orbs per explosion; the default 3 with 1 spawns 7.");
-            ExplosionSubPointCount = config.Bind("Experimental", "ExplosionSubPointCount", 1,
-                "Upper bound for subExplosionPointCount when ExplosionScale is enabled (vanilla 2).");
-            ExplosionClusterWindowSeconds = config.Bind("Experimental", "ExplosionClusterWindowSeconds", 1.2f,
-                "Time window in seconds used to detect an explosion cluster. Non-positive or NaN restores 1.2.");
-            ExplosionClusterRadius = config.Bind("Experimental", "ExplosionClusterRadius", 3.5f,
-                "Radius in world units used to detect an explosion cluster. Non-positive or NaN restores 3.5.");
-            ExplosionNearDistance = config.Bind("Experimental", "ExplosionNearDistance", 50f,
-                "Explosions closer than this to the local viewpoint keep the configured orb count.");
-            ExplosionFarDistance = config.Bind("Experimental", "ExplosionFarDistance", 120f,
-                "Explosions at or beyond this distance keep only the single centre orb. Must be " +
-                "greater than ExplosionNearDistance; otherwise it is forced to Near * 2 at runtime.");
-            RemoteRagdollLodEnterDistance = config.Bind("Experimental", "RemoteRagdollLodEnterDistance", 60f,
-                "Distance in world units at which a remote character enters the passive-ragdoll tier.");
-            RemoteRagdollLodExitDistance = config.Bind("Experimental", "RemoteRagdollLodExitDistance", 50f,
-                "Distance in world units below which a remote character returns to full behaviour. " +
-                "Must be lower than RemoteRagdollLodEnterDistance; otherwise it is clamped at runtime.");
-            DetailBodypartThrottleInterval = config.Bind("Experimental", "DetailBodypartThrottleInterval", 3,
-                "Animate for detail bodyparts (fingers / jiggle bones / toes / mouth and jaw) of " +
-                "remote characters runs once every N physics ticks; 1 = no throttling. Values " +
-                "above 10 are clamped to 10 at runtime.");
-            TumbleWeedTargetScanInterval = config.Bind("Experimental", "TumbleWeedTargetScanInterval", 5,
-                "A tumbleweed re-solves its chase target once every N physics ticks and reuses the " +
-                "previous direction in between; 1 = rescan every tick. Values above 10 are clamped " +
-                "to 10 at runtime.");
-            RemoteClusterAnimationInterval = config.Bind("Experimental", "RemoteClusterAnimationInterval", 2,
-                "A remote, fully controlled, non-interacting player character evaluates its animation " +
-                "graph once every N physics ticks; the accumulated delta time is passed to the " +
-                "evaluation so animation speed is unchanged. 1 = every tick. Values above 4 are " +
-                "clamped to 4 at runtime.");
             CollisionCallbackReuse = config.Bind("Experimental", "CollisionCallbackReuse", false,
                 "Set Physics.reuseCollisionCallbacks so the engine stops allocating a Collision " +
                 "object plus a ContactPoint[] for every reported collision. Only applied when " +
@@ -365,16 +290,12 @@ namespace PeakSafeOptimizer.Config
                 "the game that keeps a Collision reference across frames. Off by default because it " +
                 "is a process-wide engine flag: the game side is audited and guarded, but any other " +
                 "mod that keeps a Collision past its callback would start reading a reused instance.");
-            GraphicsBudgetEnabled = config.Bind("Graphics", "GraphicsBudgetEnabled", true,
-                "Master switch for the one-directional graphics caps below. Each cap is only ever " +
-                "written when the current value is more expensive, and the values captured at " +
-                "startup are restored when this is turned off or the game shuts down.");
-            GraphicsSkinWeightCap = config.Bind("Graphics", "GraphicsSkinWeightCap", 0,
-                "Upper bound for QualitySettings.skinWeights (1, 2, 4 or 255). Bones per vertex is " +
-                "the per-vertex cost of every skinned character, so this scales with how many " +
-                "players are on screen. Any other value - including the default 0 - disables this " +
-                "cap. Off by default because fewer bone weights is a visible reduction in how " +
-                "cleanly a character deforms at the joints; set it to 2 to trade that for frames.");
+            GraphicsCapBoneWeights = config.Bind("Graphics", "CapBoneWeights", false,
+                "Limit QualitySettings.skinWeights to two bones per vertex. Bones per vertex is a " +
+                "per-vertex cost of every skinned character, so it scales with how many players are " +
+                "on screen, and the game exposes no setting for it. Only ever lowered, never raised, " +
+                "and the launch value is restored when this is turned off. Off by default: joint " +
+                "deformation (shoulders, hips) becomes a little coarser.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");
             return new OptimizerConfig(patches, detailed);
