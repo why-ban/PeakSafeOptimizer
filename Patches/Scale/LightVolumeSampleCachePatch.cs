@@ -71,6 +71,10 @@ namespace PeakSafeOptimizer.Patches.Scale
                 lightVolume, "raySpacing", typeof(float));
             FieldInfo lightMapField = ScaleValidation.RequireInstanceFieldByTypeName(
                 lightVolume, "lightMapData", CompressableLightMapTypeName);
+            // The accessor emitted below depends on this being a struct field, so assert it here
+            // rather than letting a reshaped build produce invalid IL at delegate creation time.
+            if (!lightMapField.FieldType.IsValueType)
+                throw new InvalidOperationException("LightVolume.lightMapData is no longer a struct");
 
             // Proof that the audited sample chain is still exactly the one being cached.
             ScaleValidation.RequireInstanceMethodByTypeNames(
@@ -292,17 +296,16 @@ namespace PeakSafeOptimizer.Patches.Scale
                 typeof(LightVolumeSampleCachePatch).Module,
                 true);
             ILGenerator il = method.GetILGenerator();
-            Label noMap = il.DefineLabel();
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Castclass, owner);
-            il.Emit(OpCodes.Ldfld, field);
-            il.Emit(OpCodes.Dup);
-            il.Emit(OpCodes.Brfalse_S, noMap);
-            il.Emit(OpCodes.Callvirt, getter);
-            il.Emit(OpCodes.Ret);
-            il.MarkLabel(noMap);
-            il.Emit(OpCodes.Pop);
-            il.Emit(OpCodes.Ldnull);
+            // The audited lightMapData is `public struct CompressableLightMap`
+            // (CompressableLightMap.cs:11). The previous version loaded it with Ldfld and branched on
+            // it, which is invalid IL for a value type - exactly how this patch failed in-game
+            // ("Invalid IL code ... brfalse.s"). Take the field address and call the property
+            // non-virtually on it instead; Initialize has already proven the field is a struct. The
+            // Texture3D the getter returns is still null-checked by the caller.
+            il.Emit(OpCodes.Ldflda, field);
+            il.Emit(OpCodes.Call, getter);
             il.Emit(OpCodes.Ret);
             return (Func<object, UnityEngine.Object>)method.CreateDelegate(
                 typeof(Func<object, UnityEngine.Object>));
