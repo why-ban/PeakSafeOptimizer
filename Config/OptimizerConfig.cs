@@ -133,7 +133,30 @@ namespace PeakSafeOptimizer.Config
         LightVolumeSampleCache,
         // ScaleExperimental lane: reuses a tumbleweed's chase target for a few physics ticks instead
         // of rescanning every character every tick. Desert/Mesa specific because tumbleweeds are.
-        TumbleWeedTargetScan
+        TumbleWeedTargetScan,
+        // ScaleExperimental lane: evaluates the animation PlayableGraph of a remote, fully
+        // controlled, non-interacting player character once every N physics ticks instead of every
+        // tick, using the accumulated delta time so the animation still advances at real speed.
+        // Unlike the RemoteRagdollLod entries this has no distance term, so it is the main lever for
+        // a clustered lobby, which is where CharacterRagdoll.FixedUpdate dominates the managed
+        // physics step.
+        RemoteClusterAnimationThrottle,
+        // Scale lane: makes Snowball.OnCollisionStay store a private copy of the collision instead of
+        // the engine's Collision instance. Prerequisite for CollisionCallbackReuse, because with
+        // reuse enabled that instance is a single shared object whose data later contact pairs
+        // overwrite, and Snowball is the only place in the game that keeps one across frames.
+        SnowballContactSnapshot,
+        // Scale lane: equivalent replacement of Snowball.ProcessLastCollision that consumes the
+        // snapshot captured by SnowballContactSnapshot instead of re-reading the stored Collision.
+        SnowballContactConsume,
+        // Scale lane: equivalent replacement of CharacterMovement.OnCollision that reads contact 0
+        // once through Collision.GetContact(0) instead of four times through the allocating
+        // Collision.contacts array.
+        CollisionContactsNoAlloc,
+        // Scale lane: skips Bodypart.AddMovementForce when the force it would accumulate is exactly
+        // the zero vector, which is the case for every part of every character that is not pressing a
+        // movement key - i.e. everyone standing in a cluster.
+        BodypartMovementForceIdentity
     }
 
     public sealed class OptimizerConfig
@@ -180,6 +203,27 @@ namespace PeakSafeOptimizer.Config
         // Patches\ScaleExperimental\TumbleWeedTargetScanPatch, which treats 1 or less as "rescan
         // every tick" and clamps anything above 10.
         internal static ConfigEntry<int> TumbleWeedTargetScanInterval;
+
+        // Evaluation interval for the RemoteClusterAnimationThrottle entry. Read at runtime by
+        // Patches\ScaleExperimental\RemoteClusterAnimationThrottlePatch, which treats 1 or less as
+        // "evaluate every tick" and clamps anything above 4.
+        internal static ConfigEntry<int> RemoteClusterAnimationInterval;
+
+        // Graphics budget (non-Harmony lane, see Graphics\GraphicsBudget). Every write is a
+        // one-directional min(): a value that is already cheaper than the cap is left alone, and the
+        // launch snapshot is restored on shutdown or when the lane is disabled.
+        internal static ConfigEntry<bool> GraphicsBudgetEnabled;
+        internal static ConfigEntry<bool> GraphicsDisableMsaa;
+        internal static ConfigEntry<float> GraphicsShadowDistanceCap;
+        internal static ConfigEntry<int> GraphicsShadowCascadeCap;
+        internal static ConfigEntry<int> GraphicsSkinWeightCap;
+
+        /// <summary>
+        /// True when the collision-callback reuse flag may be flipped. Plugin only applies it after
+        /// both Snowball guards are confirmed installed, because the game caches one Collision
+        /// reference across frames there.
+        /// </summary>
+        internal static ConfigEntry<bool> CollisionCallbackReuse;
 
         public bool IsEnabled(PatchId id) => _patches.TryGetValue(id, out ConfigEntry<bool> entry) && entry.Value;
 
@@ -288,7 +332,17 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.LightVolumeSampleCache] =
                     BindPatch(config, PatchId.LightVolumeSampleCache, true),
                 [PatchId.TumbleWeedTargetScan] =
-                    BindExperimental(config, PatchId.TumbleWeedTargetScan, true)
+                    BindExperimental(config, PatchId.TumbleWeedTargetScan, true),
+                [PatchId.RemoteClusterAnimationThrottle] =
+                    BindExperimental(config, PatchId.RemoteClusterAnimationThrottle, true),
+                [PatchId.SnowballContactSnapshot] =
+                    BindPatch(config, PatchId.SnowballContactSnapshot, true),
+                [PatchId.SnowballContactConsume] =
+                    BindPatch(config, PatchId.SnowballContactConsume, true),
+                [PatchId.CollisionContactsNoAlloc] =
+                    BindPatch(config, PatchId.CollisionContactsNoAlloc, true),
+                [PatchId.BodypartMovementForceIdentity] =
+                    BindPatch(config, PatchId.BodypartMovementForceIdentity, true)
             };
             ExplosionPointCount = config.Bind("Experimental", "ExplosionPointCount", 3,
                 "Upper bound for explosionPointCount when ExplosionScale is enabled. Vanilla is 4, " +
@@ -318,6 +372,35 @@ namespace PeakSafeOptimizer.Config
                 "A tumbleweed re-solves its chase target once every N physics ticks and reuses the " +
                 "previous direction in between; 1 = rescan every tick. Values above 10 are clamped " +
                 "to 10 at runtime.");
+            RemoteClusterAnimationInterval = config.Bind("Experimental", "RemoteClusterAnimationInterval", 2,
+                "A remote, fully controlled, non-interacting player character evaluates its animation " +
+                "graph once every N physics ticks; the accumulated delta time is passed to the " +
+                "evaluation so animation speed is unchanged. 1 = every tick. Values above 4 are " +
+                "clamped to 4 at runtime.");
+            CollisionCallbackReuse = config.Bind("Experimental", "CollisionCallbackReuse", true,
+                "Set Physics.reuseCollisionCallbacks so the engine stops allocating a Collision " +
+                "object plus a ContactPoint[] for every reported collision. Only applied when " +
+                "both Snowball guards installed successfully, because Snowball is the only place in " +
+                "the game that keeps a Collision reference across frames.");
+            GraphicsBudgetEnabled = config.Bind("Graphics", "GraphicsBudgetEnabled", true,
+                "Master switch for the one-directional graphics caps below. Each cap is only ever " +
+                "written when the current value is more expensive, and the values captured at " +
+                "startup are restored when this is turned off or the game shuts down.");
+            GraphicsDisableMsaa = config.Bind("Graphics", "GraphicsDisableMsaa", true,
+                "Force URP msaaSampleCount to 1. In this build MSAA and STP upscaling are mutually " +
+                "exclusive (UniversalCameraData.IsTemporalAAEnabled requires msaaSamples == 1), and " +
+                "the shipped default is render scale 0.8 with STP requested, so MSAA currently costs " +
+                "full price while silently downgrading the upscaler to bilinear.");
+            GraphicsShadowDistanceCap = config.Bind("Graphics", "GraphicsShadowDistanceCap", 60f,
+                "Upper bound for the URP shadow distance in metres. 0 or less disables this cap. " +
+                "The in-game Shadow Distance setting writes 200/150/75/0.");
+            GraphicsShadowCascadeCap = config.Bind("Graphics", "GraphicsShadowCascadeCap", 1,
+                "Upper bound for the URP shadow cascade count (1-4). Values outside that range " +
+                "disable this cap. The in-game setting writes 2 for High/Medium and 1 for Low/Off.");
+            GraphicsSkinWeightCap = config.Bind("Graphics", "GraphicsSkinWeightCap", 2,
+                "Upper bound for QualitySettings.skinWeights (1, 2, 4 or 255). Bones per vertex is " +
+                "the per-vertex cost of every skinned character, so this scales with how many " +
+                "players are on screen. Any other value disables this cap.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");
             return new OptimizerConfig(patches, detailed);

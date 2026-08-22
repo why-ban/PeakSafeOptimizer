@@ -20,8 +20,8 @@
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=54, applied=39, skipped=15, failed=0, module-failures=0`（`enabled` 视 cfg 中保留键是否被手动置 true）。
-  - `registered=54` = 39 个真实补丁 + 15 个保留占位键。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=59, applied=44, skipped=15, failed=0, module-failures=0`（`enabled` 视 cfg 中保留键是否被手动置 true）。
+  - `registered=59` = 44 个真实补丁 + 15 个保留占位键。
   - `applied=39` 是真正的有效值；`skipped=15` 对应 15 个保留键（默认 `false` 时 `disabled by configuration`，手动置 `true` 时 `no definition registered`）。
 - 逐项结果三类行：
   - `applied  : <名称> [<兼容等级>] <目标方法>`（39 行，兼容等级为 Structural/Fingerprint/StrictIl）。
@@ -61,7 +61,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 回滚顺序：先关最近启用的单项，再逐项关闭 39 项默认开启定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（39 项全开）
+## 2. 第一层：默认配置安全性（44 项全开）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
@@ -119,6 +119,19 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | D6 | `LightVolumeSampleCache` | 多人聚集说话、进出隧道/开阔地、风区 | 语音混响随位置变化正常；环境混响与风区判定与原版一致；重烘焙/切段后无陈旧值 |
 | D7 | `TumbleWeedTargetScan` | 方山风滚草过境（单人与多人） | 风滚草仍追人、撞击掉血与击倒正常；转向无明显迟钝；非房主端行为不变 |
 
+### 2.6 聚集专项（本轮新增 5 项 + 2 条非 Harmony 车道）
+
+这一组必须在**多人**下看，单人不可能命中。
+
+| 步骤 | 项 | 场景 | 通过条件 |
+|---|---|---|---|
+| E1 | `Experimental.RemoteClusterAnimationThrottle` | 2 人近距互看：站立、走动、跳跃、蹲下、挥手表情、切换手持物品、抓取互拉、倒地 | 远端角色动画略微「一顿一顿」是预期（25Hz），但**动作速度必须与原版相同**（不能变慢也不能变快）；四肢不瘫软、不漂浮；持物手部位置正常；切换物品瞬间不出现姿态错乱。任一条不满足就把 `RemoteClusterAnimationInterval` 设回 `1`（等于关闭）而不是继续调大。 |
+| E2 | 同上 | 8 人聚集 2 分钟，其中夹杂表情、抓取、装备切换、倒地 | 与 E1 相同判据；同时记录帧时间与该项关闭时的对比。fallback 命中的人（被抓、攀爬、观战中）应看不出任何差别。 |
+| E3 | `Fixes.BodypartMovementForceIdentity` | 全员站立不动 → 同时开始移动 → 冲刺 → 停下 | 起步/停下手感与原版一致，无延迟感；站立时无异常抖动。 |
+| E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse` | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
+| E5 | `Fixes.SnowballContactSnapshot` + `Fixes.SnowballContactConsume` | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
+| E6 | `Graphics.*` | 启动后等 10 秒，进游戏看画面；再进设置菜单改一次「阴影距离」和「渲染缩放」 | 日志出现一行 `graphics budget snapshot:`，记录的应是**你自己的画质设置**而不是默认值；阴影在 60 米外消失、边缘变硬是预期；关掉 MSAA 后画面应更清晰（0.8 缩放由 STP 上采样），且日志不再刷 `Disabling TAA and STP because MSAA is on`；改设置后 2 秒内上限重新生效。把 `Graphics.GraphicsBudgetEnabled` 改为 `false`，画质应回到你的设置。 |
+
 ### 2.5 组合长时
 
 4 人组合长时（覆盖以上全部）：无累积日志、无状态分叉、无 `failed` 项。
@@ -147,7 +160,17 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 ### 3.6 八人近距聚集（核心对比）
 
-在同一位置让 8 人以上持续移动、跳跃、蹲下、倒地并互相碰撞。保持场景和镜头近似一致，分别测试 `Experimental.DetailBodypartThrottle=true` 与 `false`，至少各记录 60 秒帧率/帧时间。四项 `RemoteRagdollLod*` 因 60 米距离门槛在该场景预期不触发，不得把其收益计入近距结果。
+在同一位置让 8 人以上持续移动、跳跃、蹲下、倒地并互相碰撞。保持场景和镜头近似一致，至少各记录 60 秒帧率/帧时间。四项 `RemoteRagdollLod*` 因 60 米距离门槛在该场景预期不触发，不得把其收益计入近距结果。
+
+按下面顺序逐项单关，每次只关一个（其余保持默认），这样才能分辨收益来自哪条车道：
+
+1. `Experimental.RemoteClusterAnimationThrottle`（预期这一项是聚集场景 CPU 收益最大的单项）
+2. `Experimental.DetailBodypartThrottle`
+3. `Fixes.BodypartMovementForceIdentity`
+4. `Experimental.CollisionCallbackReuse`（GC 维度，看帧时间毛刺而不是平均帧率）
+5. `Graphics.GraphicsBudgetEnabled`（GPU 维度，与上面四项互不相干）
+
+如果只有第 5 项关掉后帧率明显下降、前四项都无差别，那说明这个场景是 GPU bound，继续调 CPU 侧没有意义，应该往画质设置方向走。反之则相反。这一步的判定力比任何单项收益都高。
 
 ### 3.7 人数阶梯
 
@@ -157,12 +180,13 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
 
-1. 全部默认（39 项开启）与本插件完全卸载的基线对比。
+1. 全部默认（44 项开启）与本插件完全卸载的基线对比。
 2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
 3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
+5. 仅关闭 `Graphics.GraphicsBudgetEnabled`，同一位置同镜头对比——方山主因判定为 GPU 侧，这一项是唯一直接作用于 GPU 的车道，判定力最高。
 
-研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本），Harmony 补丁够不到。本轮四项只削减 CPU/GC 负载，**不应期待它们单独把 10-20 FPS 拉回正常**；GPU 侧仍需画质设置 A/B（MSAA↔TAA、阴影距离、分辨率缩放）闭环判定。
+研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本）。`Graphics.*` 车道正是针对这一条：阴影距离/级联与每顶点骨骼数是能从代码侧压到的部分，全屏效果（`_GlobalHazeAmount` 等）虽然同样只被 shader 消费、代码层零消费，但压低它们会直接改变美术观感，且 `DayNightManager` 在 Update 阶段写、没有 `[DefaultExecutionOrder]`，要稳定压过它需要 LateUpdate 组件——这一项**本轮未实施**，留待你对 `Graphics.*` 现有四项的观感拍板之后再决定。
 
 ## 4. 第三层：逐项开关实验（每次只关/开一个）
 

@@ -84,6 +84,15 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             internal int LastItemId = int.MinValue;
             /// <summary>Distinct frames seen at full behaviour; capped at <see cref="WarmupFrames"/>.</summary>
             internal int FullFrames;
+
+            /// <summary>
+            /// Separate per-physics-tick cache for <see cref="ShouldThrottleAnimation"/>. It uses its
+            /// own fields so the distance-tier state machine above cannot be perturbed by a caller
+            /// that does not participate in the hysteresis.
+            /// </summary>
+            internal int ThrottleTick = int.MinValue;
+            internal bool ThrottleResult;
+            internal int ThrottleItemId = int.MinValue;
         }
 
         private static ConditionalWeakTable<Character, State> _states;
@@ -224,6 +233,60 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         }
 
         /// <summary>
+        /// The same fallback list as <see cref="ShouldDowngrade"/> with the distance term removed, for
+        /// callers that reduce - rather than remove - per-tick animation work and therefore have to
+        /// keep helping when the whole lobby is standing in one spot. Cached once per physics tick per
+        /// character, because it is asked from a per-character FixedUpdate.
+        ///
+        /// The item-identity check exists for the same reason as in <see cref="ShouldDowngrade"/>:
+        /// CharacterItems.Equip writes data.currentItem and then drives
+        /// CharacterRagdoll.FixedUpdate()/SnapToAnimation() manually in the same frame, before
+        /// data.sinceItemAttach is reset (CharacterItems.cs:602-627). A cached "throttle" answer there
+        /// could let a manual snap consume animation targets from an earlier tick.
+        /// </summary>
+        internal static bool ShouldThrottleAnimation(Character c)
+        {
+            ConditionalWeakTable<Character, State> states = _states;
+            Func<CharacterData, UnityEngine.Object> grabJoint = _grabJoint;
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef = _grabbedPlayer;
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef = _grabbingPlayer;
+            if (states == null || grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
+                return false;
+            if (c == null)
+                return false;
+
+            CharacterData data = c.data;
+            Character local = Character.localCharacter;
+            if (data == null || local == null)
+                return false;
+
+            State state = states.GetOrCreateValue(c);
+            int itemId = data.currentItem != null ? data.currentItem.GetInstanceID() : 0;
+            if (state.ThrottleItemId != itemId)
+            {
+                state.ThrottleItemId = itemId;
+                state.ThrottleResult = false;
+                state.ThrottleTick = PhysicsTick();
+                return false;
+            }
+
+            int tick = PhysicsTick();
+            if (state.ThrottleTick == tick)
+                return state.ThrottleResult;
+
+            bool result = PassesFallbacks(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef);
+            state.ThrottleTick = tick;
+            state.ThrottleResult = result;
+            return result;
+        }
+
+        /// <summary>
+        /// Physics-step index, matching the expression used by the other physics-phase patches so
+        /// several of them cannot disagree about which step they are on.
+        /// </summary>
+        internal static int PhysicsTick() => Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
+
+        /// <summary>
         /// Fallback list plus distance hysteresis. Returns true only when this remote character is
         /// far away and in a plain, fully controlled, non-interacting state.
         /// </summary>
@@ -235,6 +298,34 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
             AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef,
             int tier)
+        {
+            if (!PassesFallbacks(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef))
+                return false;
+
+            if (!TryGetCenter(local, out Vector3 localCenter) || !TryGetCenter(c, out Vector3 center))
+                return false;
+            float distance = Vector3.Distance(localCenter, center);
+            if (float.IsNaN(distance))
+                return false;
+
+            ResolveThresholds(out float enter, out float exit);
+            // Hysteresis: entering the passive tier needs distance >= enter, leaving it needs
+            // distance < exit, and exit is always strictly below enter (see ResolveThresholds).
+            return tier == TierPassiveRagdoll ? !(distance < exit) : distance >= enter;
+        }
+
+        /// <summary>
+        /// Everything except the distance term: a remote, player-controlled, fully controlled,
+        /// non-interacting character. Any hit means "never reduce anything for this character".
+        /// Ordered cheapest first.
+        /// </summary>
+        private static bool PassesFallbacks(
+            Character c,
+            CharacterData data,
+            Character local,
+            Func<CharacterData, UnityEngine.Object> grabJoint,
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef)
         {
             // Fallback list. Any hit means "never downgrade"; the character keeps full vanilla
             // behaviour. Ordered cheapest first.
@@ -273,17 +364,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
             if (Character.observedCharacter == c)
                 return false;
-
-            if (!TryGetCenter(local, out Vector3 localCenter) || !TryGetCenter(c, out Vector3 center))
-                return false;
-            float distance = Vector3.Distance(localCenter, center);
-            if (float.IsNaN(distance))
-                return false;
-
-            ResolveThresholds(out float enter, out float exit);
-            // Hysteresis: entering the passive tier needs distance >= enter, leaving it needs
-            // distance < exit, and exit is always strictly below enter (see ResolveThresholds).
-            return tier == TierPassiveRagdoll ? !(distance < exit) : distance >= enter;
+            return true;
         }
 
         /// <summary>

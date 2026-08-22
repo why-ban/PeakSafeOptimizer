@@ -6,7 +6,9 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Diagnostics;
+using PeakSafeOptimizer.Graphics;
 using PeakSafeOptimizer.Infrastructure;
+using UnityEngine;
 
 namespace PeakSafeOptimizer
 {
@@ -21,6 +23,8 @@ namespace PeakSafeOptimizer
         private LifecycleRegistry _lifecycle;
         private OptimizerConfig _settings;
         private PatchInstaller _installer;
+        private GraphicsBudget _graphicsBudget;
+        private CollisionCallbackReuse _collisionReuse;
         private int _mainThreadId;
         private readonly ConcurrentQueue<PatchId> _pendingSettingChanges = new ConcurrentQueue<PatchId>();
 
@@ -46,6 +50,11 @@ namespace PeakSafeOptimizer
                 // one grep still pulls the whole report out of a shared BepInEx log.
                 foreach (string line in status.FormatReport())
                     Logger.LogInfo(line);
+
+                // Non-Harmony lanes, both driven from Update and both restoring what they found.
+                _graphicsBudget = new GraphicsBudget(Logger);
+                _collisionReuse = new CollisionCallbackReuse(Logger);
+                _collisionReuse.Evaluate(_installer);
 
                 Config.SettingChanged += OnSettingChanged;
             }
@@ -76,6 +85,7 @@ namespace PeakSafeOptimizer
             bool fullyUninstalled = UninstallAll("Startup rollback");
             if (fullyUninstalled)
             {
+                ShutdownGlobalLanes();
                 DisposeLifecycle("Startup rollback");
                 _lifecycle = null;
                 _harmony = null;
@@ -120,6 +130,8 @@ namespace PeakSafeOptimizer
         {
             while (_pendingSettingChanges.TryDequeue(out PatchId id))
                 ApplySettingChange(id);
+
+            _graphicsBudget?.Update(Time.unscaledDeltaTime);
         }
 
         private void ApplySettingChange(PatchId id)
@@ -148,6 +160,10 @@ namespace PeakSafeOptimizer
                     Logger.LogError($"HotReload: {id} {entry.Result}: {entry.Reason}");
                     break;
             }
+
+            // The Snowball guards gate the global collision-reuse flag, so re-decide after any toggle.
+            if (id == PatchId.SnowballContactSnapshot || id == PatchId.SnowballContactConsume)
+                _collisionReuse?.Evaluate(_installer);
         }
 
         private void OnDestroy()
@@ -160,6 +176,9 @@ namespace PeakSafeOptimizer
             {
                 Logger.LogError($"Unsubscribe SettingChanged failed: {ex}");
             }
+
+            // Engine-global state first: it is not tied to whether the Harmony uninstall succeeds.
+            ShutdownGlobalLanes();
 
             bool fullyUninstalled = UninstallAll("Shutdown");
             if (fullyUninstalled)
@@ -197,6 +216,33 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"{phase}: verified uninstall failed safely: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Restores the graphics caps and the collision-reuse flag. Each step is isolated so one
+        /// failure cannot block the other.
+        /// </summary>
+        private void ShutdownGlobalLanes()
+        {
+            try
+            {
+                _collisionReuse?.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Collision reuse shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
+            }
+            _collisionReuse = null;
+
+            try
+            {
+                _graphicsBudget?.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError($"Graphics budget shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
+            }
+            _graphicsBudget = null;
         }
 
         private void DisposeLifecycle(string phase)
