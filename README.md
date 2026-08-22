@@ -57,11 +57,17 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 仍未完成：多人压力基准、长时稳定性、性能基准。本文不提供任何帧率数字。
 
-## 已注册补丁（43 项，全部默认开启）
+## 已注册补丁（41 个补丁 / 37 个开关）
 
-当前是私人集中测试配置：43 个有实现的补丁、两条非 Harmony 车道（`Graphics.*` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。配置文件里的每一个开关都对应一个真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为补丁开关默认值。
+配置文件里的每一个开关都对应真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为开关默认值。
 
-### 稳定性修复（`Patches\Stability`，5 项）
+**默认值策略**：只有**行为等价**（结果与原版逐位相同）或**修复原版故障**的补丁默认开启。任何用观感、手感或动画精度换帧数的项一律默认关闭——那个取舍属于安装者，不属于模组。
+
+默认关闭的项：`Experimental.RemoteRagdollLod`（一个开关 = 4 个补丁，远距姿态凝固）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）、`Graphics.GraphicsSkinWeightCap`（关节形变变糙）、`Experimental.CollisionCallbackReuse`（进程级引擎标志）。
+
+**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 41 个补丁对应 37 个开关。
+
+### 稳定性修复（`Patches\Stability`，5 项，全部默认开启）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
@@ -71,12 +77,11 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.IKItemGuard` | `true` | Fingerprint | Prefix：`CharacterAnimations.ConfigureIK()` | 当 `currentItem` 非空但 prefab 缺 `Hand_R`/`Hand_L` 子节点时跳过该帧手部 IK 定位。只在手部节点缺失时跳过，ReachIK 分支不受影响。 |
 | `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | 当 `Character.localCharacter`、data、refs 或 stats 在观战/重生/退出/第三方调用窗口中不完整时跳过表情轮更新。只读不写。 |
 
-### 等价改写（`Patches\Equivalent`，2 项）
+### 等价改写（`Patches\Equivalent`，1 项）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
 | `Fixes.Campfire` | `true` | Fingerprint | Prefix：`Campfire.EveryoneInRange(float)` | 单次扫描同时维护 `_charactersInRadius` 副作用；补丁自身状态不可用时回退原方法。 |
-| `Fixes.BreakableBridge` | `true` | StrictIl | Transpiler：`BreakableBridge.FixedUpdate()` | 复用每座桥已有列表做字典键快照，消除每物理帧 `Dictionary.Keys.ToList()` 分配。**当前唯一保留的 Transpiler**。 |
 
 ### 规模化（`Patches\Scale`，7 项）
 
@@ -123,30 +128,29 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.LightVolumeSampleCache` | `true` | Fingerprint | Prefix+Postfix：`LightVolume.SamplePositionAlpha(Vector3, bool)` | 按截断后的光照体素缓存 `Texture3D.GetPixel` 结果；每角色每帧的语音遮蔽采样、环境混响与风区采样共享同一缓存。贴图实例或 `updateCount` 变化即整体失效。 |
 | `Experimental.TumbleWeedTargetScan` | `true` | Fingerprint | Prefix：`TumbleWeed.FixedUpdate()` | 风滚草的目标扫描默认每 5 个物理 tick 解一次并复用，`AddForce` 仍每 tick 施加且方向按缓存目标当前 Center 重算；距离比较改平方。沙漠/方山专项。 |
 
-### 远端与物理实验（`Patches\ScaleExperimental`，6 项）
+### 远端与物理实验（`Patches\ScaleExperimental`，5 项，**全部默认关闭**）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
-| `Experimental.RemoteRagdollLodPhysics` | `true` | Fingerprint | Prefix：`CharacterRagdoll.FixedUpdate()` | 仅对 60 米外、已预热且无交互的远端玩家跳过动画图、IK 与姿态采样；50 米内恢复。近距聚集场景不触发。 |
-| `Experimental.RemoteRagdollLodAnimate` | `true` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 与同一远距判定共享状态，跳过关节动画驱动；Gravity、Drag、ToggleUseGravity、ApplyForces 保持运行。 |
-| `Experimental.RemoteRagdollLodMovementForce` | `true` | Fingerprint | Prefix：`Bodypart.AddMovementForce(Vector3)` | 远距被动 ragdoll 不再加入本地动画移动力；网络位置与碰撞路径不变。 |
-| `Experimental.RemoteRagdollLodAnimator` | `true` | Fingerprint | Prefix：`CharacterAnimations.Update()` | 远距被动 ragdoll 跳过大部分 Animator 参数写入，但保留投掷/表情计时、表情退出、水状态复位和辅助位置更新；本地、bot、观战、抓取、攀爬、死亡、装备窗口等均回退原版。 |
-| `Experimental.JointProjection` | `true` | Fingerprint | Postfix：`RigCreator.SpawnJoint(...)` | 将运行时新建 joint 的 projection 从 PositionAndRotation 改为 PositionOnly。审计构建中该方法没有正常运行时调用者，预期通常不触发且可能无收益。 |
-| `Experimental.DetailBodypartThrottle` | `true` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 非本地、非交互玩家的 59 个手指/jiggle/脚趾/嘴颌部件默认每 3 个物理 tick 驱动一次，并按部件错峰。近距聚集时仍生效，是当前直接削减该场景托管物理工作的主要补丁。 |
+| `Experimental.RemoteRagdollLod`（本组共用一个开关） | `false` | Fingerprint | Prefix：`CharacterRagdoll.FixedUpdate()` | 仅对 60 米外、已预热且无交互的远端玩家跳过动画图、IK 与姿态采样；50 米内恢复。近距聚集场景不触发。 |
+| 同上开关 | `false` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 与同一远距判定共享状态，跳过关节动画驱动；Gravity、Drag、ToggleUseGravity、ApplyForces 保持运行。 |
+| 同上开关 | `false` | Fingerprint | Prefix：`Bodypart.AddMovementForce(float)` | 远距被动 ragdoll 不再加入本地动画移动力；网络位置与碰撞路径不变。 |
+| 同上开关 | `false` | Fingerprint | Prefix：`CharacterAnimations.Update()` | 远距被动 ragdoll 跳过大部分 Animator 参数写入，但保留投掷/表情计时、表情退出、水状态复位和辅助位置更新；本地、bot、观战、抓取、攀爬、死亡、装备窗口等均回退原版。 |
+| `Experimental.DetailBodypartThrottle` | `false` | Fingerprint | Prefix：`Bodypart.Animate(float, float)` | 非本地、非交互玩家的 59 个手指/jiggle/脚趾/嘴颌部件默认每 3 个物理 tick 驱动一次，并按部件错峰。近距聚集时仍生效，是当前直接削减该场景托管物理工作的主要补丁。 |
 
 爆炸相关说明：`Dynamite.RPC_Explode` 每次实例化 `explosionPrefab`（含 `ExplosionEffect`），原版 `GetPoints` 生成 `1 + 4 + 2*4 = 13` 个爆炸球，每个球再实例化 orb 并做 Animator/MeshRenderer/MaterialPropertyBlock 处理，多人同时投掷时放大。`ExplosionScale` 使用 16 项预分配环形缓冲记录邻近爆炸，整个判定零分配；它只削减球数。球内 `new MaterialPropertyBlock()` 的复用**未实现**——该分配位于 `Start()` 内嵌套的 `IExplode` 局部函数（编译器生成方法）里，属于多模组环境下已证明不可靠的目标形态，故不做。全局 `Shader.WarmupAllShaders()` 实现已因主线程冻结事故彻底删除。
 
-### 聚集专项（本轮新增 5 项 + 2 条非 Harmony 车道）
+### 聚集专项（5 项 + 2 条非 Harmony 车道）
 
 这一组是针对「离队友远就不卡、聚集起来才十几帧」这条实测事实设计的：每一项的收益都必须随屏幕上的玩家数增长，纯距离门控的老车道（`RemoteRagdollLod*`）在聚集时完全不触发，因此不算在内。
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与代价 |
 |---|---:|---|---|---|
-| `Experimental.RemoteClusterAnimationThrottle` | `true` | Fingerprint | Prefix（执行 tick 完整替换）：`CharacterRagdoll.FixedUpdate()` | 远端、满控、无交互玩家的动画图默认每 2 个物理 tick 求值一次，并按实例错峰。求值时传入**累计 dt**，所以动画总时长不变，只是时间分辨率降到 25Hz。跳过的 tick 仍执行 `SetPhysicsMats`；`SaveAnimationData`/`SaveAdditionalTransformPositions` 故意不执行（它们读的是动画姿态，在没求值的 tick 上读到的是物理姿态，照读会让角色瘫软）。渲染骨骼由 PhysX 直接驱动，不会冻结。代价：远端动画以 25Hz 步进，近距可感知。 |
+| `Experimental.RemoteClusterAnimationThrottle` | `false` | Fingerprint | Prefix（执行 tick 完整替换）：`CharacterRagdoll.FixedUpdate()` | 远端、满控、无交互玩家的动画图默认每 2 个物理 tick 求值一次，并按实例错峰。求值时传入**累计 dt**，所以动画总时长不变，只是时间分辨率降到 25Hz。跳过的 tick 仍执行 `SetPhysicsMats`；`SaveAnimationData`/`SaveAdditionalTransformPositions` 故意不执行（它们读的是动画姿态，在没求值的 tick 上读到的是物理姿态，照读会让角色瘫软）。渲染骨骼由 PhysX 直接驱动，不会冻结。代价：远端动画以 25Hz 步进，近距可感知。 |
 | `Fixes.BodypartMovementForceIdentity` | `true` | Fingerprint | Prefix：`Bodypart.AddMovementForce(float)` | 力恰为零向量时跳过（`forcesToAdd += Vector3.zero` 逐位恒等）。站着不动的人 `worldMovementInput_Lerp` 收敛到零、`GetMovementForce` 对不可移动状态直接返回 0，所以聚集聊天时全员每部件每 tick 命中。 |
 | `Fixes.CollisionContactsNoAlloc` | `true` | Fingerprint | Prefix（完整替换）：`CharacterMovement.OnCollision(Collision, bool, Bodypart)` | 原版对 `Collision.contacts` 取值 7 次，本版通过 `GetContact(0)` 只读一次。引擎源码逐位等价（`Collision.cs:104-117` 与 `ContactPair.cs:110-137` 翻转逻辑一致）。零接触点这一分支交回原版（原版会抛 `IndexOutOfRangeException`，不替它改语义）。 |
-| `Fixes.SnowballContactSnapshot` | `true` | Fingerprint | Prefix（完整替换）：`Snowball.OnCollisionStay(Collision)` | 全仓唯一跨帧持有 `Collision` 的地方（`Snowball.cs:105/227`）。改为在回调内快照 collider / gameObject / `GetContact(0).normal`，这是开启回调复用的前提。 |
-| `Fixes.SnowballContactConsume` | `true` | Fingerprint | Prefix（完整替换）：`Snowball.ProcessLastCollision()` | 消费上面的快照（内联原版 `Scale` 与 `ClassifyCurrentContact`），分支、比较与字段写入顺序逐行复刻。无快照时（补丁半装）交回原版。 |
+| `Fixes.SnowballContactGuard`（本组共用一个开关） | `true` | Fingerprint | Prefix（完整替换）：`Snowball.OnCollisionStay(Collision)` | 全仓唯一跨帧持有 `Collision` 的地方（`Snowball.cs:105/227`）。改为在回调内快照 collider / gameObject / `GetContact(0).normal`，这是开启回调复用的前提。 |
+| 同上开关 | `true` | Fingerprint | Prefix（完整替换）：`Snowball.ProcessLastCollision()` | 消费上面的快照（内联原版 `Scale` 与 `ClassifyCurrentContact`），分支、比较与字段写入顺序逐行复刻。无快照时（补丁半装）交回原版。 |
 
 两条非 Harmony 车道：
 
@@ -154,17 +158,14 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 | 配置键 | 默认 | 作用与回滚 |
 |---|---:|---|
-| `Experimental.CollisionCallbackReuse` | `true` | 置 `Physics.reuseCollisionCallbacks = true`。默认 false 时引擎对**每次上报的碰撞**都先分配一个 `Collision` 对象加一个 `ContactPoint[]`（`Collision.cs:87-94` 构造函数里就填好，回调看不看 contacts 都付钱），而每个接触对的两侧各派发一次（`Physics.cs:1440-1454`）——聚集的布娃娃正是这个量最大的场景。仅当上面两个 Snowball 守卫都安装成功才会开启，任一未装立即写回原值；退出时也写回。 |
-| `Graphics.*` | `true` | URP 资产与 QualitySettings 的**单向 min() 上限**，只覆盖游戏画质菜单**没有提供**的项：`GraphicsDisableMsaa`（msaaSampleCount→1 且 QualitySettings.antiAliasing→0）与 `GraphicsSkinWeightCap=2`。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
+| `Experimental.CollisionCallbackReuse` | `false` | 置 `Physics.reuseCollisionCallbacks = true`。默认 false 时引擎对**每次上报的碰撞**都先分配一个 `Collision` 对象加一个 `ContactPoint[]`（`Collision.cs:87-94` 构造函数里就填好，回调看不看 contacts 都付钱），而每个接触对的两侧各派发一次（`Physics.cs:1440-1454`）——聚集的布娃娃正是这个量最大的场景。仅当上面两个 Snowball 守卫都安装成功才会开启，任一未装立即写回原值；退出时也写回。 |
+| `Graphics.*` | `true`（但其下唯一的上限默认关闭） | 对 `QualitySettings` 的**单向 min() 上限**，只覆盖游戏画质菜单**没有提供**的项。目前只剩 `GraphicsSkinWeightCap`（每顶点骨骼数），**默认 0 = 不限制**。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
 
-`GraphicsDisableMsaa` 是这一组里最值钱的项，也是唯一「关掉反而更清晰」的项：本构建 MSAA 与 STP 上采样互斥（`IsSTPEnabled` 依赖 `IsTemporalAAEnabled`，后者要求 `msaaSamples == 1`，`UniversalCameraData.cs:390-416`），而游戏默认档是 `renderScale = 0.8` + `upscalingFilter = STP`（`RenderScaleSetting.cs:19-55`）。日志里反复出现的 `Disabling TAA and STP because MSAA is on` 就是这个矛盾：现在等于 MSAA 全价照付，同时 0.8 分辨率退化成普通双线性拉伸（`RenderFinalPassRenderGraph` 里 STP 分支根本没有 case）。把 MSAA 关掉即省下 MSAA 成本，又让 STP 真正做它该做的上采样。
-
-这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项**。MSAA 与每顶点骨骼数在 `Assembly-CSharp` 里都没有对应设置类（全仓检索抗锯齿/TAA/MSAA 只命中 `MirrorCameraScript.cs:60`），玩家无从调整，所以由补丁接管。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
+这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项，且不默认改变画面**。每顶点骨骼数在 `Assembly-CSharp` 里没有对应设置类，玩家无从调整，所以由补丁提供开关——但默认关闭，因为降低骨骼权重会让关节处的形变变糙。曾经这里还有一项强制关闭 MSAA（游戏同样没有抗锯齿设置），已移除：关抗锯齿是画面决定，应该由玩家做。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
 
 ## 本轮修复的问题（变更说明）
 
 - `WeightRefreshCoalescing` 改为**内容签名合并**：不再因「玩家数不变」就丢弃同帧必要的重量刷新（Photon 单帧可派发多条 RPC，签名折叠 roster 槽位/背包/卡住物品等全部输入）。
-- `BreakableBridge` 快照 null 时恢复原版语义（新建列表写回）而非抛异常。
 - `RagdollPhysicsMats` 改 pending 签名确认：原方法真正返回后才确认签名，避免原方法抛异常时状态错记。
 - 扫描循环内 null candidate 改为静默 `continue`，移除高频诊断开销。
 - `CampfireProtectionMerge` 改为每次读 `s_CampfireBuff` 当前值（不再缓存值）。
@@ -220,10 +221,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.DetailBodypartThrottleInterval` | `3` | 远端细节部件每 N 个物理 tick 执行一次 Animate；1 为不降频，运行时最大钳制到 10。 |
 | `Experimental.TumbleWeedTargetScanInterval` | `5` | 风滚草每 N 个物理 tick 重解一次追踪目标；1 为每 tick 重扫，运行时最大钳制到 10。 |
 | `Experimental.RemoteClusterAnimationInterval` | `2` | 远端玩家动画图每 N 个物理 tick 求值一次（传累计 dt，动画速度不变）；1 为每 tick，运行时最大钳制到 4。 |
-| `Experimental.CollisionCallbackReuse` | `true` | 见上文非 Harmony 车道；需两个 Snowball 守卫都安装成功。 |
+| `Experimental.CollisionCallbackReuse` | `false` | 见上文非 Harmony 车道；需两个 Snowball 守卫都安装成功。 |
 | `Graphics.GraphicsBudgetEnabled` | `true` | 画质上限车道总开关；关闭即回滚本车道写过的值。 |
-| `Graphics.GraphicsDisableMsaa` | `true` | 关 MSAA 让 STP 生效（详见上文）。 |
-| `Graphics.GraphicsSkinWeightCap` | `2` | `QualitySettings.skinWeights` 上限（1/2/4/255）；其它值表示不限制。每顶点骨骼数直接随屏幕上的角色数放大。 |
+| `Graphics.GraphicsSkinWeightCap` | `0`（不限制） | `QualitySettings.skinWeights` 上限（1/2/4/255）；其它值（含默认 0）表示不限制。每顶点骨骼数直接随屏幕上的角色数放大，想换帧数设为 `2`；默认关闭因为它会让关节形变变糙。 |
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
 
@@ -235,7 +235,6 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - 诊断开关和数值型配置（爆炸、远距 LOD、细节部件间隔）由运行时代码读取 `.Value`，修改后即时生效，无需 Harmony install/uninstall。
 - **两条非 Harmony 车道的热重载走轮询而非事件**：`Graphics.*` 与 `Experimental.CollisionCallbackReuse` 不是补丁开关，`ConfigFile.SettingChanged` 路径（可能在非主线程触发）刻意忽略它们；`Plugin.Update` 每帧各调一次它们的 `Update`/`Evaluate`，两者都幂等且在配置未变时只做一次配置读 + 早退。因此改值后 `Graphics.*` 最迟 2 秒生效（重申周期），`CollisionCallbackReuse` 下一帧生效。**关闭时会主动写回快照**：单独关 `GraphicsDisableMsaa` 或把 `GraphicsSkinWeightCap` 设为非法值也会各自还原，不需要整体关掉车道再打开。
 - 热切换在日志输出 `HotReload:` 一行，例如 `HotReload: <名称> enabled→installed` / `disabled→uninstalled`，失败或跳过则带 `Skipped*`/`Failed*` 与原因。每项切换独立隔离，失败只影响该项。
-- **风险提示**：唯一 Transpiler（`Fixes.BreakableBridge`）热切换风险最高——卸载/重装需要 Harmony 反向应用并重新编译 IL。若切换后出现异常或 `verified uninstall failed`，应重启游戏确认，不要在运行中反复切换。
 
 ## 构建与安装
 
@@ -251,8 +250,7 @@ dotnet build -c Release
 
 - 完成的是构建、结构验证与严格 IL 自检；**多人压力基准、长时稳定性与性能基准仍未完成**，不给帧率数值承诺。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未完成游戏内验证；若目标构建结构不符会各自 fail-closed 单独跳过，不影响其余补丁。
-- 本轮 5 项新补丁与 2 条非 Harmony 车道全部**未经游戏内验证**。其中两项有明确的观感/行为代价需要亲眼确认：`RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）与 `Graphics.GraphicsDisableMsaa`（AA 由 MSAA 换成 TAA/STP）。
+- 有观感/行为代价的项已全部改为**默认关闭**，需要自行开启并亲眼确认：6 项远端动画降频（`RemoteClusterAnimationThrottle`、`DetailBodypartThrottle`、4 项 `RemoteRagdollLod*`）、`Graphics.GraphicsSkinWeightCap`，以及全局引擎标志 `Experimental.CollisionCallbackReuse`。
 - `CollisionCallbackReuse` 是**引擎全局标志**。游戏侧唯一的跨帧 `Collision` 引用已定位并加守卫，已装的 20 个模组 DLL 元数据里也没有任何 `OnCollisionEnter/Stay/Exit`（除 MMHOOK 自动生成的 hook 库），但第三方模组仍是唯一无法静态穷尽的面。装机后滚一颗雪球确认它还能变大即可覆盖这条路径。
 - 长序列 IL 模式在多模组预处理环境不可靠；后续新增补丁优先窄 Prefix + 精确结构验证。
-- 热重载对 Prefix 补丁较安全，但唯一 Transpiler（`BreakableBridge`）存在 IL 反向应用的残余风险，切换后如有异常请重启确认。
 - 遇到崩溃、存档/网络/场景切换/物品/物理/渲染异常，立即关闭最近启用的单项并保留完整日志。测试步骤见 [TESTING.md](TESTING.md)。

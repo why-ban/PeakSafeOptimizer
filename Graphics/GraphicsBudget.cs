@@ -36,20 +36,13 @@ namespace PeakSafeOptimizer.Graphics
     ///   * Writing the asset cannot leak into the user's saved settings: Setting.Save only ever
     ///     serialises the setting's own value, and nothing reads the asset back into a setting.
     ///
-    /// The MSAA cap is the reason this lane still exists, because it changes image quality in the
-    /// player's favour and the game offers no MSAA setting at all (no anti-aliasing or TAA setting
-    /// exists in Assembly-CSharp). In this build MSAA and STP upscaling are mutually exclusive:
-    /// IsSTPEnabled requires IsTemporalAAEnabled (UniversalCameraData.cs:409-416), which requires
-    /// cameraTargetDescriptor.msaaSamples == 1 (:390-398). The shipped default is render scale 0.8
-    /// with upscalingFilter=STP (RenderScaleSetting.cs:19-34, GetDefaultValue returns High=0.8), and
-    /// the log shows the resulting warning ("Disabling TAA and STP because MSAA is on") repeatedly. So
-    /// with MSAA on, the game pays for MSAA at full price and still resolves 0.8 to native with a
-    /// plain bilinear blit, because no case in RenderFinalPassRenderGraph matches upscalingFilter=STP
-    /// when STP did not run. Setting msaaSampleCount to 1 removes the MSAA cost and lets STP do the
-    /// upscale it was configured for.
+    /// An MSAA cap used to live here as well. It is gone: forcing anti-aliasing off is a visual
+    /// decision that belongs to the player, not to an optimizer, even though the game exposes no MSAA
+    /// setting of its own.
     ///
     /// Bones per vertex has no setting either, and it is a per-vertex cost of every skinned character,
-    /// so it scales with how many players are on screen.
+    /// so it scales with how many players are on screen. It is opt-in (default off) because fewer
+    /// bone weights per vertex is a visible reduction in how cleanly a character deforms at the joints.
     /// </summary>
     internal sealed class GraphicsBudget
     {
@@ -68,8 +61,6 @@ namespace PeakSafeOptimizer.Graphics
         private readonly ManualLogSource _log;
 
         private bool _hasSnapshot;
-        private int _snapshotMsaaSampleCount;
-        private int _snapshotAntiAliasing;
         private SkinWeights _snapshotSkinWeights;
         private int _snapshotAssetId;
 
@@ -80,8 +71,6 @@ namespace PeakSafeOptimizer.Graphics
 
         // Last value this lane wrote for each cap, so a restore only reverts its own writes and never
         // stamps a stale snapshot over a value the user changed in the settings menu meanwhile.
-        private int _wroteMsaaSampleCount;
-        private int _wroteAntiAliasing = -1;
         private SkinWeights _wroteSkinWeights;
         private bool _wroteAnySkinWeights;
 
@@ -136,35 +125,6 @@ namespace PeakSafeOptimizer.Graphics
             try
             {
                 CaptureSnapshot(asset);
-
-                bool disableMsaa = OptimizerConfig.GraphicsDisableMsaa?.Value ?? false;
-                if (disableMsaa)
-                {
-                    // The asset value is what feeds cameraTargetDescriptor.msaaSamples, i.e. the check
-                    // that decides whether TAA/STP may run (UniversalRenderPipeline.cs:1021-1033,
-                    // UniversalCameraData.cs:390-398).
-                    if (asset.msaaSampleCount > 1)
-                    {
-                        asset.msaaSampleCount = 1;
-                        _wroteMsaaSampleCount = 1;
-                    }
-                    // The backbuffer path takes its sample count from Screen.msaaSamples instead
-                    // (ScriptableRenderer.cs:1003-1018), which is fed by QualitySettings.antiAliasing.
-                    // URP only syncs that from the asset in its constructor
-                    // (UniversalRenderPipeline.cs:321-324), so it has to be lowered separately.
-                    if (QualitySettings.antiAliasing > 1)
-                    {
-                        QualitySettings.antiAliasing = 0;
-                        _wroteAntiAliasing = 0;
-                    }
-                }
-                else
-                {
-                    // Turning one cap off has to hand that value back on its own, otherwise the only
-                    // way to undo it would be disabling the whole lane.
-                    RestoreMsaa(asset);
-                }
-
                 ApplySkinWeightCap();
                 _applied = true;
             }
@@ -217,14 +177,10 @@ namespace PeakSafeOptimizer.Graphics
             if (_hasSnapshot && _snapshotAssetId == assetId)
                 return;
             _snapshotAssetId = assetId;
-            _snapshotMsaaSampleCount = asset.msaaSampleCount;
-            _snapshotAntiAliasing = QualitySettings.antiAliasing;
             _snapshotSkinWeights = QualitySettings.skinWeights;
             _hasSnapshot = true;
             _log?.LogInfo(
-                "PeakSafeOptimizer | graphics budget snapshot: " +
-                $"msaaSampleCount={_snapshotMsaaSampleCount}, antiAliasing={_snapshotAntiAliasing}, " +
-                $"skinWeights={_snapshotSkinWeights}");
+                $"PeakSafeOptimizer | graphics budget snapshot: skinWeights={_snapshotSkinWeights}");
         }
 
         private void Restore(string reason)
@@ -234,11 +190,6 @@ namespace PeakSafeOptimizer.Graphics
                 return;
             try
             {
-                UniversalRenderPipelineAsset asset = ResolveAsset();
-                if (asset != null && asset.GetInstanceID() == _snapshotAssetId)
-                {
-                    RestoreMsaa(asset);
-                }
                 RestoreSkinWeights();
                 _log?.LogInfo($"PeakSafeOptimizer | graphics budget restored launch values ({reason}).");
             }
@@ -249,23 +200,9 @@ namespace PeakSafeOptimizer.Graphics
         }
 
         /// <summary>
-        /// Reverts the MSAA pair, but only where this lane wrote the value and the value is still the
-        /// one it wrote. Anything else is the user's or the game's own newer value and is left alone.
+        /// Reverts the bone-weight cap, but only if this lane wrote it and the value is still the one
+        /// it wrote. Anything else is the user's or the game's own newer value and is left alone.
         /// </summary>
-        private void RestoreMsaa(UniversalRenderPipelineAsset asset)
-        {
-            if (_wroteMsaaSampleCount != 0 && asset != null &&
-                asset.msaaSampleCount == _wroteMsaaSampleCount)
-            {
-                asset.msaaSampleCount = _snapshotMsaaSampleCount;
-            }
-            _wroteMsaaSampleCount = 0;
-
-            if (_wroteAntiAliasing >= 0 && QualitySettings.antiAliasing == _wroteAntiAliasing)
-                QualitySettings.antiAliasing = _snapshotAntiAliasing;
-            _wroteAntiAliasing = -1;
-        }
-
         private void RestoreSkinWeights()
         {
             if (_wroteAnySkinWeights && QualitySettings.skinWeights == _wroteSkinWeights)

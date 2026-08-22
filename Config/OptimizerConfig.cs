@@ -7,6 +7,11 @@ namespace PeakSafeOptimizer.Config
     /// One entry per independently gated patch. Every member has both a config binding in
     /// <see cref="OptimizerConfig.Bind"/> and a registered PatchDefinition, so the generated config
     /// file never advertises a switch that does nothing.
+    ///
+    /// Default policy for a shipped build: a patch is on by default only when it is behaviourally
+    /// equivalent to vanilla, or when it repairs a vanilla fault. Anything that trades appearance,
+    /// feel or animation fidelity for frames is off by default, however real its win is - that trade
+    /// belongs to whoever installed the mod, not to the mod.
     /// </summary>
     public enum PatchId
     {
@@ -27,7 +32,6 @@ namespace PeakSafeOptimizer.Config
         // (2315 occurrences confirmed in-game).
         EmoteWheelGuard,
         Campfire,
-        BreakableBridge,
         // Scale lane (Lane E1): scan/redundant-write reduction for multiplayer player counts
         // and ground item counts. Each entry is registered and gated independently.
         HeatEmissionScan,
@@ -80,10 +84,6 @@ namespace PeakSafeOptimizer.Config
         RemoteRagdollLodAnimate,
         RemoteRagdollLodMovementForce,
         RemoteRagdollLodAnimator,
-        // ScaleExperimental lane: downgrades every ragdoll ConfigurableJoint created by
-        // RigCreator.SpawnJoint from JointProjectionMode.PositionAndRotation to PositionOnly. One
-        // write per joint at creation time, no per-frame state.
-        JointProjection,
         // ScaleExperimental lane: runs Bodypart.Animate only every Nth physics tick for
         // the detail bodyparts (fingers, jiggle bones, toes, mouth/jaw) of remote, fully controlled,
         // non-interacting player characters. Unlike the RemoteRagdollLod entries this has no distance
@@ -139,11 +139,26 @@ namespace PeakSafeOptimizer.Config
     public sealed class OptimizerConfig
     {
         private readonly Dictionary<PatchId, ConfigEntry<bool>> _patches;
+        /// <summary>
+        /// Reverse index of <see cref="_patches"/>. A group switch maps to several PatchIds, so hot
+        /// reload has to toggle all of them when one entry changes.
+        /// </summary>
+        private readonly Dictionary<ConfigEntry<bool>, List<PatchId>> _byEntry;
 
         private OptimizerConfig(Dictionary<PatchId, ConfigEntry<bool>> patches, ConfigEntry<bool> detailedDiagnostics)
         {
             _patches = patches;
             DetailedDiagnostics = detailedDiagnostics;
+            _byEntry = new Dictionary<ConfigEntry<bool>, List<PatchId>>();
+            foreach (KeyValuePair<PatchId, ConfigEntry<bool>> pair in patches)
+            {
+                if (!_byEntry.TryGetValue(pair.Value, out List<PatchId> ids))
+                {
+                    ids = new List<PatchId>(1);
+                    _byEntry.Add(pair.Value, ids);
+                }
+                ids.Add(pair.Key);
+            }
         }
 
         public ConfigEntry<bool> DetailedDiagnostics { get; }
@@ -194,7 +209,6 @@ namespace PeakSafeOptimizer.Config
         // capped here and have been removed: the game has a Shadow Distance setting that writes both,
         // so capping them overrode a choice the player had already made.
         internal static ConfigEntry<bool> GraphicsBudgetEnabled;
-        internal static ConfigEntry<bool> GraphicsDisableMsaa;
         internal static ConfigEntry<int> GraphicsSkinWeightCap;
 
         /// <summary>
@@ -208,22 +222,23 @@ namespace PeakSafeOptimizer.Config
 
         /// <summary>
         /// Reverse lookup used by hot reload. Given the ConfigEntryBase raised by
-        /// ConfigFile.SettingChanged, returns true and the PatchId if it is one of this plugin's
-        /// boolean patch toggles. Value-typed entries (DetailedLogging, ExplosionPointCount,
+        /// ConfigFile.SettingChanged, returns true and every PatchId it controls if it is one of this
+        /// plugin's boolean patch toggles - several, when the switch is a group of patches that only
+        /// make sense together. Value-typed entries (DetailedLogging, ExplosionPointCount,
         /// ExplosionSubPointCount, ...) are not patch toggles and return false, because they are
         /// read at runtime and already take effect immediately.
         /// </summary>
-        public bool TryGetPatchId(ConfigEntryBase changedSetting, out PatchId id)
+        public bool TryGetPatchIds(ConfigEntryBase changedSetting, out IReadOnlyList<PatchId> ids)
         {
-            foreach (KeyValuePair<PatchId, ConfigEntry<bool>> pair in _patches)
+            foreach (KeyValuePair<ConfigEntry<bool>, List<PatchId>> pair in _byEntry)
             {
-                if (ReferenceEquals(pair.Value, changedSetting))
+                if (ReferenceEquals(pair.Key, changedSetting))
                 {
-                    id = pair.Key;
+                    ids = pair.Value;
                     return true;
                 }
             }
-            id = default;
+            ids = null;
             return false;
         }
 
@@ -237,7 +252,6 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.IKItemGuard] = BindPatch(config, PatchId.IKItemGuard, true),
                 [PatchId.EmoteWheelGuard] = BindPatch(config, PatchId.EmoteWheelGuard, true),
                 [PatchId.Campfire] = BindPatch(config, PatchId.Campfire, true),
-                [PatchId.BreakableBridge] = BindPatch(config, PatchId.BreakableBridge, true),
                 [PatchId.HeatEmissionScan] = BindPatch(config, PatchId.HeatEmissionScan, true),
                 [PatchId.RagdollPhysicsMats] = BindPatch(config, PatchId.RagdollPhysicsMats, true),
                 [PatchId.ItemCollisionMode] = BindPatch(config, PatchId.ItemCollisionMode, true),
@@ -262,17 +276,8 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.ItemAudioManagerHash] = BindPatch(config, PatchId.ItemAudioManagerHash, true),
                 [PatchId.BarAfflictionLayout] = BindPatch(config, PatchId.BarAfflictionLayout, true),
                 [PatchId.AnimatedMouthMaterial] = BindPatch(config, PatchId.AnimatedMouthMaterial, true),
-                [PatchId.RemoteRagdollLodPhysics] =
-                    BindExperimental(config, PatchId.RemoteRagdollLodPhysics, true),
-                [PatchId.RemoteRagdollLodAnimate] =
-                    BindExperimental(config, PatchId.RemoteRagdollLodAnimate, true),
-                [PatchId.RemoteRagdollLodMovementForce] =
-                    BindExperimental(config, PatchId.RemoteRagdollLodMovementForce, true),
-                [PatchId.RemoteRagdollLodAnimator] =
-                    BindExperimental(config, PatchId.RemoteRagdollLodAnimator, true),
-                [PatchId.JointProjection] = BindExperimental(config, PatchId.JointProjection, true),
                 [PatchId.DetailBodypartThrottle] =
-                    BindExperimental(config, PatchId.DetailBodypartThrottle, true),
+                    BindExperimental(config, PatchId.DetailBodypartThrottle, false),
                 [PatchId.CollisionCharacterLookup] = BindPatch(config, PatchId.CollisionCharacterLookup, true),
                 [PatchId.AnimatorValuesHash] = BindPatch(config, PatchId.AnimatorValuesHash, true),
                 [PatchId.PlayerNameUiWrites] = BindPatch(config, PatchId.PlayerNameUiWrites, true),
@@ -283,16 +288,43 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.TumbleWeedTargetScan] =
                     BindExperimental(config, PatchId.TumbleWeedTargetScan, true),
                 [PatchId.RemoteClusterAnimationThrottle] =
-                    BindExperimental(config, PatchId.RemoteClusterAnimationThrottle, true),
-                [PatchId.SnowballContactSnapshot] =
-                    BindPatch(config, PatchId.SnowballContactSnapshot, true),
-                [PatchId.SnowballContactConsume] =
-                    BindPatch(config, PatchId.SnowballContactConsume, true),
+                    BindExperimental(config, PatchId.RemoteClusterAnimationThrottle, false),
                 [PatchId.CollisionContactsNoAlloc] =
                     BindPatch(config, PatchId.CollisionContactsNoAlloc, true),
                 [PatchId.BodypartMovementForceIdentity] =
                     BindPatch(config, PatchId.BodypartMovementForceIdentity, true)
             };
+
+            // Groups: sets of patches that are only correct together, so they get one switch each
+            // rather than one per patch. A per-patch switch would invite a half-enabled combination
+            // that looks supported and is not.
+            //
+            // RemoteRagdollLod: four patches sharing one distance-tier decision
+            // (Patches\ScaleExperimental\RemoteRagdollLod). Enabling only some of them means a remote
+            // character has its animation graph skipped but keeps being driven towards animation
+            // targets, or the reverse - neither is a state the tier was reasoned about in.
+            BindGroup(config, patches, "Experimental", "RemoteRagdollLod", false,
+                "Distance tier for remote characters: beyond RemoteRagdollLodEnterDistance a remote, " +
+                "fully controlled, non-interacting player stops evaluating its animation graph, joint " +
+                "animation, movement force and Animator parameters, and becomes a passive ragdoll " +
+                "carried by physics and the network. Gravity, drag and force flushing keep running. " +
+                "Off by default: a distant character visibly freezes its pose. One switch for all four " +
+                "patches, which are only coherent together.",
+                PatchId.RemoteRagdollLodPhysics,
+                PatchId.RemoteRagdollLodAnimate,
+                PatchId.RemoteRagdollLodMovementForce,
+                PatchId.RemoteRagdollLodAnimator);
+
+            // Snowball: the snapshot is written by one patch and read by the other. Installing only
+            // the writer wastes work; installing only the reader leaves it with nothing to read.
+            BindGroup(config, patches, "Fixes", "SnowballContactGuard", true,
+                "Makes Snowball keep a value copy of its collision instead of the engine's Collision " +
+                "instance (Snowball.cs:105 is the only cross-frame Collision reference in the game). " +
+                "Equivalent on its own, and the prerequisite for Experimental.CollisionCallbackReuse. " +
+                "One switch for the writing and the reading half, which are useless apart.",
+                PatchId.SnowballContactSnapshot,
+                PatchId.SnowballContactConsume);
+
             ExplosionPointCount = config.Bind("Experimental", "ExplosionPointCount", 3,
                 "Upper bound for explosionPointCount when ExplosionScale is enabled. Vanilla is 4, " +
                 "which together with the vanilla subExplosionPointCount of 2 spawns " +
@@ -326,24 +358,23 @@ namespace PeakSafeOptimizer.Config
                 "graph once every N physics ticks; the accumulated delta time is passed to the " +
                 "evaluation so animation speed is unchanged. 1 = every tick. Values above 4 are " +
                 "clamped to 4 at runtime.");
-            CollisionCallbackReuse = config.Bind("Experimental", "CollisionCallbackReuse", true,
+            CollisionCallbackReuse = config.Bind("Experimental", "CollisionCallbackReuse", false,
                 "Set Physics.reuseCollisionCallbacks so the engine stops allocating a Collision " +
                 "object plus a ContactPoint[] for every reported collision. Only applied when " +
                 "both Snowball guards installed successfully, because Snowball is the only place in " +
-                "the game that keeps a Collision reference across frames.");
+                "the game that keeps a Collision reference across frames. Off by default because it " +
+                "is a process-wide engine flag: the game side is audited and guarded, but any other " +
+                "mod that keeps a Collision past its callback would start reading a reused instance.");
             GraphicsBudgetEnabled = config.Bind("Graphics", "GraphicsBudgetEnabled", true,
                 "Master switch for the one-directional graphics caps below. Each cap is only ever " +
                 "written when the current value is more expensive, and the values captured at " +
                 "startup are restored when this is turned off or the game shuts down.");
-            GraphicsDisableMsaa = config.Bind("Graphics", "GraphicsDisableMsaa", true,
-                "Force URP msaaSampleCount to 1. In this build MSAA and STP upscaling are mutually " +
-                "exclusive (UniversalCameraData.IsTemporalAAEnabled requires msaaSamples == 1), and " +
-                "the shipped default is render scale 0.8 with STP requested, so MSAA currently costs " +
-                "full price while silently downgrading the upscaler to bilinear.");
-            GraphicsSkinWeightCap = config.Bind("Graphics", "GraphicsSkinWeightCap", 2,
+            GraphicsSkinWeightCap = config.Bind("Graphics", "GraphicsSkinWeightCap", 0,
                 "Upper bound for QualitySettings.skinWeights (1, 2, 4 or 255). Bones per vertex is " +
                 "the per-vertex cost of every skinned character, so this scales with how many " +
-                "players are on screen. Any other value disables this cap.");
+                "players are on screen. Any other value - including the default 0 - disables this " +
+                "cap. Off by default because fewer bone weights is a visible reduction in how " +
+                "cleanly a character deforms at the joints; set it to 2 to trade that for frames.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");
             return new OptimizerConfig(patches, detailed);
@@ -354,5 +385,23 @@ namespace PeakSafeOptimizer.Config
 
         private static ConfigEntry<bool> BindExperimental(ConfigFile config, PatchId id, bool defaultValue) =>
             config.Bind("Experimental", id.ToString(), defaultValue, $"Enable the independent experimental {id} lane.");
+
+        /// <summary>
+        /// Binds one switch for a set of patches that are only correct together, and maps every member
+        /// to that single entry. <see cref="TryGetPatchIds"/> then hot-reloads the whole group at once.
+        /// </summary>
+        private static void BindGroup(
+            ConfigFile config,
+            Dictionary<PatchId, ConfigEntry<bool>> patches,
+            string section,
+            string key,
+            bool defaultValue,
+            string description,
+            params PatchId[] members)
+        {
+            ConfigEntry<bool> entry = config.Bind(section, key, defaultValue, description);
+            for (int i = 0; i < members.Length; i++)
+                patches.Add(members[i], entry);
+        }
     }
 }

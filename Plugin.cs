@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using BepInEx;
 using BepInEx.Configuration;
@@ -107,18 +108,22 @@ namespace PeakSafeOptimizer
             {
                 if (args?.ChangedSetting == null)
                     return;
-                if (_settings == null || !_settings.TryGetPatchId(args.ChangedSetting, out PatchId id))
+                if (_settings == null ||
+                    !_settings.TryGetPatchIds(args.ChangedSetting, out IReadOnlyList<PatchId> ids))
+                {
                     return; // Value-typed entries already take effect at runtime; nothing to do.
+                }
 
                 // ConfigEntry.Value changes before BepInEx raises SettingChanged. Queue background
                 // writes instead of letting the visible setting and installed Harmony state diverge.
-                if (Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+                bool offMainThread = Thread.CurrentThread.ManagedThreadId != _mainThreadId;
+                for (int i = 0; i < ids.Count; i++)
                 {
-                    _pendingSettingChanges.Enqueue(id);
-                    return;
+                    if (offMainThread)
+                        _pendingSettingChanges.Enqueue(ids[i]);
+                    else
+                        ApplySettingChange(ids[i]);
                 }
-
-                ApplySettingChange(id);
             }
             catch (Exception ex)
             {

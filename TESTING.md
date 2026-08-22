@@ -1,6 +1,6 @@
 # PeakSafeOptimizer 0.1.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**43 项有效补丁与详细诊断默认开启**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 35 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
@@ -8,7 +8,7 @@
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认：**43 项有效补丁、两条非 Harmony 车道与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
+3. 第一层用出厂默认。41 个补丁 / 37 个开关（`RemoteRagdollLod` 与 `SnowballContactGuard` 各是一个开关管多个补丁），默认开启 35 个补丁（全部为行为等价或修复原版故障），6 个有观感代价的默认关闭。默认开启项为：
 
    `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.*`。
 
@@ -20,10 +20,10 @@
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=43, applied=43, enabled=43, skipped=0, failed=0, module-failures=0`。
-  - 每个开关都对应一个真实注册的补丁，没有只显示不生效的键，所以 `registered` 与 `applied` 应当相等。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=41, enabled=35, applied=35, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
+  - 没有只显示不生效的键。`registered - enabled` 应等于默认关闭的 6 项。注意 `registered` 数的是补丁而不是开关：`Experimental.RemoteRagdollLod` 一个开关对应 4 个补丁，`Fixes.SnowballContactGuard` 一个开关对应 2 个。
 - 逐项结果三类行：
-  - `applied  : <名称> [<兼容等级>] <目标方法>`（43 行，兼容等级为 Structural/Fingerprint/StrictIl）。
+  - `applied  : <名称> [<兼容等级>] <目标方法>`（35 行，兼容等级为 Structural/Fingerprint/StrictIl）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
 - 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
@@ -49,7 +49,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 1. 进游戏后，在 ConfigurationManager 里把一个默认开启的 Prefix 补丁（例如 `Fixes.ItemCollisionMode`）关掉再打开。
 2. 观察日志：应出现 `HotReload: ItemCollisionMode disabled→uninstalled` 与 `HotReload: ItemCollisionMode enabled→installed`。
 3. 把另一个默认开启的 `Experimental.*` 补丁（例如 `Experimental.ExplosionScale`）关掉再打开，观察同格式两行。
-5. 对唯一 Transpiler（`Fixes.BreakableBridge`）做一次开关，观察是否仍正常工作；若出现 `InvalidProgramException` 或 `verified uninstall failed`，立即重启确认，不要在运行中反复切换它。
 6. 值类型配置（`Diagnostics.DetailedLogging`、爆炸集群/距离参数、远端 LOD 距离、`DetailBodypartThrottleInterval`）改值后即时生效，无需热重载动作。
 
 ## 1. 立即停止的恶性判据
@@ -58,7 +57,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 回滚顺序：先关最近启用的单项，再逐项关闭默认开启项定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（43 项全开）
+## 2. 第一层：默认配置安全性（默认开启的 35 项）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
@@ -77,7 +76,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | 步骤 | 补丁 | 内容 | 通过条件 |
 |---|---|---|---|
 | B1 | `Campfire` + `CampfireProtectionMerge` | 营火范围/休息 | `_charactersInRadius` 内容正确；有人进出/死亡时表现不变；OrbFogHandler 写入一致 |
-| B2 | `BreakableBridge` | 桥梁并发 | 人数/摇晃/断裂/重连正常；无 IL 异常 |
 | B3 | `HeatEmissionScan` | 取暖 | 范围与速率一致 |
 | B4 | `RagdollPhysicsMats` | 倒地/拖拽/冰面 | 摩擦切换正常，无打滑突变 |
 | B5 | `ItemCollisionMode` | 拾取/丢弃/背包 | 不穿地、碰撞正常 |
@@ -107,8 +105,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 | 步骤 | 补丁 | 场景 | 通过条件 |
 |---|---|---|---|
-| D1 | 四项 `RemoteRagdollLod*` | 一名远端玩家从 40 米走到 70 米再返回并切换装备 | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态 |
-| D2 | `JointProjection` | 正常角色生成与其它模组运行时建 rig（若存在） | 正常游戏无差异、无 null/反射异常；审计构建中预期通常不触发 |
+| D1 | `Experimental.RemoteRagdollLod`（一个开关，四个补丁） | 一名远端玩家从 40 米走到 70 米再返回并切换装备 | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态 |
 | D3 | `DetailBodypartThrottle` | 8 人近距聚集、移动、抓取、攀爬、倒地 | 本地角色不受影响；远端手指/jiggle/嘴颌轻微降帧可接受；关节不漂浮、不爆力、不出现 NaN |
 | D4 | `PocketBehaviorGuard` | 新玩家加入 / 重连 | 注册窗口不再出现 `UpdatePocketBehaviors` 空引用刷屏；口袋物品（背包内被动效果）行为正常 |
 | D5 | `BodypartDragIdentity` | 倒地堆叠、被风滚草撞倒、拖拽 | 阻尼观感与原版一致；手指自然下垂正常；无速度异常累积 |
@@ -121,12 +118,12 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 | 步骤 | 项 | 场景 | 通过条件 |
 |---|---|---|---|
-| E1 | `Experimental.RemoteClusterAnimationThrottle` | 2 人近距互看：站立、走动、跳跃、蹲下、挥手表情、切换手持物品、抓取互拉、倒地 | 远端角色动画略微「一顿一顿」是预期（25Hz），但**动作速度必须与原版相同**（不能变慢也不能变快）；四肢不瘫软、不漂浮；持物手部位置正常；切换物品瞬间不出现姿态错乱。任一条不满足就把 `RemoteClusterAnimationInterval` 设回 `1`（等于关闭）而不是继续调大。 |
+| E1 | `Experimental.RemoteClusterAnimationThrottle`（默认关闭，需手动开启） | 2 人近距互看：站立、走动、跳跃、蹲下、挥手表情、切换手持物品、抓取互拉、倒地 | 远端角色动画略微「一顿一顿」是预期（25Hz），但**动作速度必须与原版相同**（不能变慢也不能变快）；四肢不瘫软、不漂浮；持物手部位置正常；切换物品瞬间不出现姿态错乱。任一条不满足就把 `RemoteClusterAnimationInterval` 设回 `1`（等于关闭）而不是继续调大。 |
 | E2 | 同上 | 8 人聚集 2 分钟，其中夹杂表情、抓取、装备切换、倒地 | 与 E1 相同判据；同时记录帧时间与该项关闭时的对比。fallback 命中的人（被抓、攀爬、观战中）应看不出任何差别。 |
-| E3 | `Fixes.BodypartMovementForceIdentity` | 全员站立不动 → 同时开始移动 → 冲刺 → 停下 | 起步/停下手感与原版一致，无延迟感；站立时无异常抖动。 |
-| E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse` | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
-| E5 | `Fixes.SnowballContactSnapshot` + `Fixes.SnowballContactConsume` | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
-| E6 | `Graphics.*` | 启动后等 10 秒，进游戏看画面；再进设置菜单改一次「阴影距离」和「渲染缩放」 | 日志出现一行 `graphics budget snapshot:`，记录的应是**你自己的画质设置**而不是默认值；关掉 MSAA 后画面应更清晰（0.8 缩放由 STP 上采样），且日志不再刷 `Disabling TAA and STP because MSAA is on`；**阴影距离与级联数必须完全听游戏设置**（本车道已不再碰它们，走动时远处阴影形状不应变化）。把 `Graphics.GraphicsBudgetEnabled` 改为 `false`，画质应回到你的设置。 |
+| E3 | `Fixes.BodypartMovementForceIdentity`（默认开启） | 全员站立不动 → 同时开始移动 → 冲刺 → 停下 | 起步/停下手感与原版一致，无延迟感；站立时无异常抖动。 |
+| E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse`（后者默认关闭，需手动开启才测这一步） | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
+| E5 | `Fixes.SnowballContactGuard`（一个开关，两个补丁） | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
+| E6 | `Graphics.GraphicsSkinWeightCap`（默认 0 = 不限制，需手动设为 `2` 才测这一步） | 8 人聚集观察角色关节（肩、肘、髋）形变 | 日志出现一行 `graphics budget snapshot: skinWeights=<你的启动值>`；设为 `2` 后关节处形变会略微变糙（这是代价），改回 `0` 或把 `GraphicsBudgetEnabled` 设 `false` 应立刻还原。 |
 
 ### 2.5 组合长时
 
@@ -176,7 +173,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
 
-1. 全部默认（43 项开启）与本插件完全卸载的基线对比。
+1. 全部默认（35 项开启）与本插件完全卸载的基线对比。
 2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
 3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
@@ -190,7 +187,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 | 顺序 | 键 | 建议人数 | 场景 | 专用观察点 |
 |---:|---|---:|---|---|
-| 1 | `Fixes.BreakableBridge`（唯一 Transpiler） | 4 | 桥梁并发 | 关掉后是否仍有每帧分配差异；开关后桥梁仍正常 |
 | 2 | `Fixes.HeatEmissionScan` | 2/4 | 取暖 | 范围/速率与原版一致 |
 | 3 | `Fixes.RagdollPhysicsMats` | 2/4 | 倒地/拖拽/冰面 | 摩擦切换无突变 |
 | 4 | `Fixes.CampfireProtectionMerge` | 4 | 营火范围 | `_charactersInRadius` 内容正确 |
