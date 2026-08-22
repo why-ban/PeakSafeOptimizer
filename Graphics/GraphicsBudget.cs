@@ -16,26 +16,29 @@ namespace PeakSafeOptimizer.Graphics
     /// once and restored on shutdown or when the lane is switched off, which also covers the bool-like
     /// caps where "cheaper" is not a numeric comparison.
     ///
+    /// Scope rule: this lane only touches knobs the game does not expose. Shadow distance and cascade
+    /// count used to be capped here and are not any more - the game has a Shadow Distance setting that
+    /// writes both (ShadowDistanceSettings.cs:17-41), so capping them meant silently overriding a
+    /// choice the player had already made, and the single-cascade fit made distant shadow edges shift
+    /// while walking. Anything a player can set in the graphics menu belongs to the player.
+    ///
     /// Why writing these at runtime is safe on this build (read from the decompiled URP sources):
-    ///   * shadowDistance (UniversalRenderPipelineAsset.cs:903-913), shadowCascadeCount (:915-929),
-    ///     msaaSampleCount (:560-570) are plain managed field assignments with at most a clamp - no
-    ///     pipeline rebuild, no render target reallocation, no OnValidate. Only the three
+    ///   * msaaSampleCount (UniversalRenderPipelineAsset.cs:560-570) is a plain managed field
+    ///     assignment - no pipeline rebuild, no render target reallocation, no OnValidate. Only the three
     ///     GPU-resident-drawer setters call OnValidate, and this lane never touches those.
-    ///   * All three are re-read per camera per frame while building the frame data
-    ///     (UniversalRenderPipeline.cs:1023-1025, :1135, :1244), so a write takes effect on the next
-    ///     rendered frame and the shadow atlas is reallocated by URP itself when the cascade count
-    ///     changes (MainLightShadowCasterPass.cs:171-202).
+    ///   * It is re-read per camera per frame while building the frame data
+    ///     (UniversalRenderPipeline.cs:1021-1033), so a write takes effect on the next rendered frame.
     ///   * The game already writes the same properties at runtime from its own settings
-    ///     (ShadowDistanceSettings.ApplyValue writes 200/150/75/0 plus cascades 2/2/1/1,
-    ///     RenderScaleSetting.ApplyValue writes renderScale and upscalingFilter), so this is an
+    ///     (RenderScaleSetting.ApplyValue writes renderScale and upscalingFilter), so this is an
     ///     established pattern rather than a new one. Those ApplyValue calls run at settings load and
     ///     on user change only - nothing re-asserts them per frame - which is why a periodic
     ///     reassert is enough to stay the last writer.
     ///   * Writing the asset cannot leak into the user's saved settings: Setting.Save only ever
     ///     serialises the setting's own value, and nothing reads the asset back into a setting.
     ///
-    /// The MSAA cap deserves its own note, because it is the one that changes image quality in the
-    /// player's favour. In this build MSAA and STP upscaling are mutually exclusive:
+    /// The MSAA cap is the reason this lane still exists, because it changes image quality in the
+    /// player's favour and the game offers no MSAA setting at all (no anti-aliasing or TAA setting
+    /// exists in Assembly-CSharp). In this build MSAA and STP upscaling are mutually exclusive:
     /// IsSTPEnabled requires IsTemporalAAEnabled (UniversalCameraData.cs:409-416), which requires
     /// cameraTargetDescriptor.msaaSamples == 1 (:390-398). The shipped default is render scale 0.8
     /// with upscalingFilter=STP (RenderScaleSetting.cs:19-34, GetDefaultValue returns High=0.8), and
@@ -44,6 +47,9 @@ namespace PeakSafeOptimizer.Graphics
     /// plain bilinear blit, because no case in RenderFinalPassRenderGraph matches upscalingFilter=STP
     /// when STP did not run. Setting msaaSampleCount to 1 removes the MSAA cost and lets STP do the
     /// upscale it was configured for.
+    ///
+    /// Bones per vertex has no setting either, and it is a per-vertex cost of every skinned character,
+    /// so it scales with how many players are on screen.
     /// </summary>
     internal sealed class GraphicsBudget
     {
@@ -53,7 +59,7 @@ namespace PeakSafeOptimizer.Graphics
         /// <summary>
         /// Grace period before the first apply. The game's own graphics settings are applied once from
         /// SettingsHandler's constructor (GameHandler.cs:154 -> SettingsHandler.cs:71-76), which writes
-        /// shadowDistance/cascades and renderScale. Snapshotting before that would capture the values
+        /// renderScale among others. Snapshotting before that would capture the values
         /// serialised into the asset rather than the user's chosen ones, and the restore would then put
         /// those back instead. Waiting a few seconds makes the snapshot the user's actual settings.
         /// </summary>
@@ -62,8 +68,6 @@ namespace PeakSafeOptimizer.Graphics
         private readonly ManualLogSource _log;
 
         private bool _hasSnapshot;
-        private float _snapshotShadowDistance;
-        private int _snapshotCascadeCount;
         private int _snapshotMsaaSampleCount;
         private int _snapshotAntiAliasing;
         private SkinWeights _snapshotSkinWeights;
@@ -76,8 +80,6 @@ namespace PeakSafeOptimizer.Graphics
 
         // Last value this lane wrote for each cap, so a restore only reverts its own writes and never
         // stamps a stale snapshot over a value the user changed in the settings menu meanwhile.
-        private float _wroteShadowDistance = float.NaN;
-        private int _wroteCascadeCount;
         private int _wroteMsaaSampleCount;
         private int _wroteAntiAliasing = -1;
         private SkinWeights _wroteSkinWeights;
@@ -134,20 +136,6 @@ namespace PeakSafeOptimizer.Graphics
             try
             {
                 CaptureSnapshot(asset);
-
-                float shadowCap = OptimizerConfig.GraphicsShadowDistanceCap?.Value ?? 0f;
-                if (shadowCap > 0f && !float.IsNaN(shadowCap) && asset.shadowDistance > shadowCap)
-                {
-                    asset.shadowDistance = shadowCap;
-                    _wroteShadowDistance = shadowCap;
-                }
-
-                int cascadeCap = OptimizerConfig.GraphicsShadowCascadeCap?.Value ?? 0;
-                if (cascadeCap >= 1 && cascadeCap <= 4 && asset.shadowCascadeCount > cascadeCap)
-                {
-                    asset.shadowCascadeCount = cascadeCap;
-                    _wroteCascadeCount = cascadeCap;
-                }
 
                 bool disableMsaa = OptimizerConfig.GraphicsDisableMsaa?.Value ?? false;
                 if (disableMsaa)
@@ -219,15 +207,12 @@ namespace PeakSafeOptimizer.Graphics
             if (_hasSnapshot && _snapshotAssetId == assetId)
                 return;
             _snapshotAssetId = assetId;
-            _snapshotShadowDistance = asset.shadowDistance;
-            _snapshotCascadeCount = asset.shadowCascadeCount;
             _snapshotMsaaSampleCount = asset.msaaSampleCount;
             _snapshotAntiAliasing = QualitySettings.antiAliasing;
             _snapshotSkinWeights = QualitySettings.skinWeights;
             _hasSnapshot = true;
             _log?.LogInfo(
                 "PeakSafeOptimizer | graphics budget snapshot: " +
-                $"shadowDistance={_snapshotShadowDistance}, cascades={_snapshotCascadeCount}, " +
                 $"msaaSampleCount={_snapshotMsaaSampleCount}, antiAliasing={_snapshotAntiAliasing}, " +
                 $"skinWeights={_snapshotSkinWeights}");
         }
@@ -244,10 +229,6 @@ namespace PeakSafeOptimizer.Graphics
                 {
                     // Only revert a cap this lane actually wrote, and only while the value is still the
                     // one it wrote. Anything else is the user's or the game's own newer value.
-                    if (!float.IsNaN(_wroteShadowDistance) && asset.shadowDistance == _wroteShadowDistance)
-                        asset.shadowDistance = _snapshotShadowDistance;
-                    if (_wroteCascadeCount != 0 && asset.shadowCascadeCount == _wroteCascadeCount)
-                        asset.shadowCascadeCount = _snapshotCascadeCount;
                     if (_wroteMsaaSampleCount != 0 && asset.msaaSampleCount == _wroteMsaaSampleCount)
                         asset.msaaSampleCount = _snapshotMsaaSampleCount;
                 }
@@ -255,8 +236,6 @@ namespace PeakSafeOptimizer.Graphics
                     QualitySettings.antiAliasing = _snapshotAntiAliasing;
                 if (_wroteAnySkinWeights && QualitySettings.skinWeights == _wroteSkinWeights)
                     QualitySettings.skinWeights = _snapshotSkinWeights;
-                _wroteShadowDistance = float.NaN;
-                _wroteCascadeCount = 0;
                 _wroteMsaaSampleCount = 0;
                 _wroteAntiAliasing = -1;
                 _wroteAnySkinWeights = false;

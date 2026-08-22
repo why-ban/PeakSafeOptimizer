@@ -194,10 +194,12 @@ namespace PeakSafeOptimizer.Config
         // Graphics budget (non-Harmony lane, see Graphics\GraphicsBudget). Every write is a
         // one-directional min(): a value that is already cheaper than the cap is left alone, and the
         // launch snapshot is restored on shutdown or when the lane is disabled.
+        //
+        // Only knobs the game does not expose belong here. Shadow distance and cascade count were
+        // capped here and have been removed: the game has a Shadow Distance setting that writes both,
+        // so capping them overrode a choice the player had already made.
         internal static ConfigEntry<bool> GraphicsBudgetEnabled;
         internal static ConfigEntry<bool> GraphicsDisableMsaa;
-        internal static ConfigEntry<float> GraphicsShadowDistanceCap;
-        internal static ConfigEntry<int> GraphicsShadowCascadeCap;
         internal static ConfigEntry<int> GraphicsSkinWeightCap;
 
         /// <summary>
@@ -344,12 +346,6 @@ namespace PeakSafeOptimizer.Config
                 "exclusive (UniversalCameraData.IsTemporalAAEnabled requires msaaSamples == 1), and " +
                 "the shipped default is render scale 0.8 with STP requested, so MSAA currently costs " +
                 "full price while silently downgrading the upscaler to bilinear.");
-            GraphicsShadowDistanceCap = config.Bind("Graphics", "GraphicsShadowDistanceCap", 60f,
-                "Upper bound for the URP shadow distance in metres. 0 or less disables this cap. " +
-                "The in-game Shadow Distance setting writes 200/150/75/0.");
-            GraphicsShadowCascadeCap = config.Bind("Graphics", "GraphicsShadowCascadeCap", 1,
-                "Upper bound for the URP shadow cascade count (1-4). Values outside that range " +
-                "disable this cap. The in-game setting writes 2 for High/Medium and 1 for Low/Off.");
             GraphicsSkinWeightCap = config.Bind("Graphics", "GraphicsSkinWeightCap", 2,
                 "Upper bound for QualitySettings.skinWeights (1, 2, 4 or 255). Bones per vertex is " +
                 "the per-vertex cost of every skinned character, so this scales with how many " +

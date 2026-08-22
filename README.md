@@ -155,9 +155,11 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | 配置键 | 默认 | 作用与回滚 |
 |---|---:|---|
 | `Experimental.CollisionCallbackReuse` | `true` | 置 `Physics.reuseCollisionCallbacks = true`。默认 false 时引擎对**每次上报的碰撞**都先分配一个 `Collision` 对象加一个 `ContactPoint[]`（`Collision.cs:87-94` 构造函数里就填好，回调看不看 contacts 都付钱），而每个接触对的两侧各派发一次（`Physics.cs:1440-1454`）——聚集的布娃娃正是这个量最大的场景。仅当上面两个 Snowball 守卫都安装成功才会开启，任一未装立即写回原值；退出时也写回。 |
-| `Graphics.*` | `true` | URP 资产与 QualitySettings 的**单向 min() 上限**：`GraphicsDisableMsaa`（msaaSampleCount→1 且 QualitySettings.antiAliasing→0）、`GraphicsShadowDistanceCap=60`、`GraphicsShadowCascadeCap=1`、`GraphicsSkinWeightCap=2`。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
+| `Graphics.*` | `true` | URP 资产与 QualitySettings 的**单向 min() 上限**，只覆盖游戏画质菜单**没有提供**的项：`GraphicsDisableMsaa`（msaaSampleCount→1 且 QualitySettings.antiAliasing→0）与 `GraphicsSkinWeightCap=2`。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
 
-`GraphicsDisableMsaa` 是这一组里唯一「关掉反而更清晰」的项：本构建 MSAA 与 STP 上采样互斥（`IsSTPEnabled` 依赖 `IsTemporalAAEnabled`，后者要求 `msaaSamples == 1`，`UniversalCameraData.cs:390-416`），而游戏默认档是 `renderScale = 0.8` + `upscalingFilter = STP`（`RenderScaleSetting.cs:19-55`）。日志里反复出现的 `Disabling TAA and STP because MSAA is on` 就是这个矛盾：现在等于 MSAA 全价照付，同时 0.8 分辨率退化成普通双线性拉伸（`RenderFinalPassRenderGraph` 里 STP 分支根本没有 case）。把 MSAA 关掉即省下 MSAA 成本，又让 STP 真正做它该做的上采样。
+`GraphicsDisableMsaa` 是这一组里最值钱的项，也是唯一「关掉反而更清晰」的项：本构建 MSAA 与 STP 上采样互斥（`IsSTPEnabled` 依赖 `IsTemporalAAEnabled`，后者要求 `msaaSamples == 1`，`UniversalCameraData.cs:390-416`），而游戏默认档是 `renderScale = 0.8` + `upscalingFilter = STP`（`RenderScaleSetting.cs:19-55`）。日志里反复出现的 `Disabling TAA and STP because MSAA is on` 就是这个矛盾：现在等于 MSAA 全价照付，同时 0.8 分辨率退化成普通双线性拉伸（`RenderFinalPassRenderGraph` 里 STP 分支根本没有 case）。把 MSAA 关掉即省下 MSAA 成本，又让 STP 真正做它该做的上采样。
+
+这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项**。MSAA 与每顶点骨骼数在 `Assembly-CSharp` 里都没有对应设置类（全仓检索抗锯齿/TAA/MSAA 只命中 `MirrorCameraScript.cs:60`），玩家无从调整，所以由补丁接管。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
 
 ## 本轮修复的问题（变更说明）
 
@@ -221,8 +223,6 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.CollisionCallbackReuse` | `true` | 见上文非 Harmony 车道；需两个 Snowball 守卫都安装成功。 |
 | `Graphics.GraphicsBudgetEnabled` | `true` | 画质上限车道总开关；关闭即回滚本车道写过的值。 |
 | `Graphics.GraphicsDisableMsaa` | `true` | 关 MSAA 让 STP 生效（详见上文）。 |
-| `Graphics.GraphicsShadowDistanceCap` | `60` | URP 阴影距离上限（米）；`<=0` 表示不限制。游戏内设置写的是 200/150/75/0。 |
-| `Graphics.GraphicsShadowCascadeCap` | `1` | URP 阴影级联数上限（1–4）；范围外表示不限制。游戏内设置写的是 2/2/1/1。 |
 | `Graphics.GraphicsSkinWeightCap` | `2` | `QualitySettings.skinWeights` 上限（1/2/4/255）；其它值表示不限制。每顶点骨骼数直接随屏幕上的角色数放大。 |
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
@@ -250,7 +250,7 @@ dotnet build -c Release
 
 - 完成的是构建、结构验证与严格 IL 自检；**多人压力基准、长时稳定性与性能基准仍未完成**，不给帧率数值承诺。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未完成游戏内验证；若目标构建结构不符会各自 fail-closed 单独跳过，不影响其余补丁。
-- 本轮 5 项新补丁与 2 条非 Harmony 车道全部**未经游戏内验证**。其中三项有明确的观感/行为代价需要亲眼确认：`RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）、`Graphics.GraphicsDisableMsaa`（AA 由 MSAA 换成 TAA/STP）、`Graphics.GraphicsShadowCascadeCap`（远景阴影锯齿）。
+- 本轮 5 项新补丁与 2 条非 Harmony 车道全部**未经游戏内验证**。其中两项有明确的观感/行为代价需要亲眼确认：`RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）与 `Graphics.GraphicsDisableMsaa`（AA 由 MSAA 换成 TAA/STP）。
 - `CollisionCallbackReuse` 是**引擎全局标志**。游戏侧唯一的跨帧 `Collision` 引用已定位并加守卫，已装的 20 个模组 DLL 元数据里也没有任何 `OnCollisionEnter/Stay/Exit`（除 MMHOOK 自动生成的 hook 库），但第三方模组仍是唯一无法静态穷尽的面。装机后滚一颗雪球确认它还能变大即可覆盖这条路径。
 - 长序列 IL 模式在多模组预处理环境不可靠；后续新增补丁优先窄 Prefix + 精确结构验证。
 - `BugleClipGuard` 只保护 `BugleSFX.Update` 的 clip 索引路径；`RPC_SetSongByName` 不在修复范围。

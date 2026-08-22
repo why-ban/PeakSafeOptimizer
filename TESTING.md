@@ -127,7 +127,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | E3 | `Fixes.BodypartMovementForceIdentity` | 全员站立不动 → 同时开始移动 → 冲刺 → 停下 | 起步/停下手感与原版一致，无延迟感；站立时无异常抖动。 |
 | E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse` | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
 | E5 | `Fixes.SnowballContactSnapshot` + `Fixes.SnowballContactConsume` | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
-| E6 | `Graphics.*` | 启动后等 10 秒，进游戏看画面；再进设置菜单改一次「阴影距离」和「渲染缩放」 | 日志出现一行 `graphics budget snapshot:`，记录的应是**你自己的画质设置**而不是默认值；阴影在 60 米外消失、边缘变硬是预期；关掉 MSAA 后画面应更清晰（0.8 缩放由 STP 上采样），且日志不再刷 `Disabling TAA and STP because MSAA is on`；改设置后 2 秒内上限重新生效。把 `Graphics.GraphicsBudgetEnabled` 改为 `false`，画质应回到你的设置。 |
+| E6 | `Graphics.*` | 启动后等 10 秒，进游戏看画面；再进设置菜单改一次「阴影距离」和「渲染缩放」 | 日志出现一行 `graphics budget snapshot:`，记录的应是**你自己的画质设置**而不是默认值；关掉 MSAA 后画面应更清晰（0.8 缩放由 STP 上采样），且日志不再刷 `Disabling TAA and STP because MSAA is on`；**阴影距离与级联数必须完全听游戏设置**（本车道已不再碰它们，走动时远处阴影形状不应变化）。把 `Graphics.GraphicsBudgetEnabled` 改为 `false`，画质应回到你的设置。 |
 
 ### 2.5 组合长时
 
@@ -183,7 +183,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
 5. 仅关闭 `Graphics.GraphicsBudgetEnabled`，同一位置同镜头对比——方山主因判定为 GPU 侧，这一项是唯一直接作用于 GPU 的车道，判定力最高。
 
-研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本）。`Graphics.*` 车道正是针对这一条：阴影距离/级联与每顶点骨骼数是能从代码侧压到的部分，全屏效果（`_GlobalHazeAmount` 等）虽然同样只被 shader 消费、代码层零消费，但压低它们会直接改变美术观感，且 `DayNightManager` 在 Update 阶段写、没有 `[DefaultExecutionOrder]`，要稳定压过它需要 LateUpdate 组件——这一项**本轮未实施**，留待你对 `Graphics.*` 现有四项的观感拍板之后再决定。
+研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本）。补丁能从代码侧碰的只有游戏没提供设置的那部分：MSAA（关掉还顺带恢复 STP）与每顶点骨骼数。阴影距离/级联属于游戏自带设置，由你在菜单里调，补丁不再覆盖。全屏效果（`_GlobalHazeAmount` 等）虽然同样只被 shader 消费、代码层零消费，但压低它们会直接改变美术观感，**本轮未实施**。
 
 ## 4. 第三层：逐项开关实验（每次只关/开一个）
 
