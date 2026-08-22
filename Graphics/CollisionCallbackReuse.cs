@@ -56,6 +56,8 @@ namespace PeakSafeOptimizer
                     LogBlocked(installer);
                 return;
             }
+            // A later successful install clears the warning so a re-block is reported again.
+            _loggedBlocked = false;
 
             try
             {

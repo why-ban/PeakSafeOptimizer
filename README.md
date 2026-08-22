@@ -59,7 +59,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 ## 已注册补丁（43 项，全部默认开启）
 
-当前是私人集中测试配置：43 个有实现的补丁、三条非 Harmony 车道（`Graphics.*`、`Graphics.SuppressHeatHaze` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。配置文件里的每一个开关都对应一个真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为补丁开关默认值。
+当前是私人集中测试配置：43 个有实现的补丁、两条非 Harmony 车道（`Graphics.*` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。配置文件里的每一个开关都对应一个真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为补丁开关默认值。
 
 ### 稳定性修复（`Patches\Stability`，5 项）
 
@@ -150,17 +150,16 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 两条非 Harmony 车道：
 
+这两条不走 Harmony，因为它们要改的不是某个方法的行为，而是**引擎/管线的全局状态**：一个是 `Physics` 的静态标志，一个是 URP 资产与 `QualitySettings` 的字段。没有可打的目标方法，直接写就是最省的做法。它们由 `Plugin.Update` 每帧驱动，`OnDestroy` 里在 Harmony 卸载**之前**先还原（引擎全局状态与补丁卸载是否成功无关）。回滚都是「只还原自己写过、且当前值仍是自己写的那个值」，玩家或游戏中途改过的值不会被覆盖。
+
 | 配置键 | 默认 | 作用与回滚 |
 |---|---:|---|
 | `Experimental.CollisionCallbackReuse` | `true` | 置 `Physics.reuseCollisionCallbacks = true`。默认 false 时引擎对**每次上报的碰撞**都先分配一个 `Collision` 对象加一个 `ContactPoint[]`（`Collision.cs:87-94` 构造函数里就填好，回调看不看 contacts 都付钱），而每个接触对的两侧各派发一次（`Physics.cs:1440-1454`）——聚集的布娃娃正是这个量最大的场景。仅当上面两个 Snowball 守卫都安装成功才会开启，任一未装立即写回原值；退出时也写回。 |
 | `Graphics.*` | `true` | URP 资产与 QualitySettings 的**单向 min() 上限**，只覆盖游戏画质菜单**没有提供**的项：`GraphicsDisableMsaa`（msaaSampleCount→1 且 QualitySettings.antiAliasing→0）与 `GraphicsSkinWeightCap=2`。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到资产里的序列化值而不是玩家的选择），之后每 2 秒重申一次以压过设置菜单。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时回滚，绝不覆盖玩家中途改的值。 |
-| `Graphics.SuppressHeatHaze` | `true` | 每个 LateUpdate 把 shader 全局量 `_GlobalHazeAmount` 写 0，**彻底消除方山的全屏热浪扭曲**。该量由当前段落的 `DayNightProfile` 驱动，只有沙漠/方山非零，其它图写 0 是空操作。写入时机选 LateUpdate 的依据：`DayNightManager` 的三处写入分别在 `Awake`、`Update`（`UpdateCycle:416-421`）与 `blendRoutine` 协程（:205-228），协程恢复点在 Update 之后、LateUpdate 之前，所以 LateUpdate 必为该帧最后写者，无需 Harmony；游戏里另两个 LateUpdate 全局量写入者（`LavaPost`、`StormVisual`）写的是别的属性名，不冲突。关闭时把最后见到的非零值写回（profile 的静态项只在段落混合期写，不写回会一直停在 0）。 |
 
 `GraphicsDisableMsaa` 是这一组里最值钱的项，也是唯一「关掉反而更清晰」的项：本构建 MSAA 与 STP 上采样互斥（`IsSTPEnabled` 依赖 `IsTemporalAAEnabled`，后者要求 `msaaSamples == 1`，`UniversalCameraData.cs:390-416`），而游戏默认档是 `renderScale = 0.8` + `upscalingFilter = STP`（`RenderScaleSetting.cs:19-55`）。日志里反复出现的 `Disabling TAA and STP because MSAA is on` 就是这个矛盾：现在等于 MSAA 全价照付，同时 0.8 分辨率退化成普通双线性拉伸（`RenderFinalPassRenderGraph` 里 STP 分支根本没有 case）。把 MSAA 关掉即省下 MSAA 成本，又让 STP 真正做它该做的上采样。
 
 这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项**。MSAA 与每顶点骨骼数在 `Assembly-CSharp` 里都没有对应设置类（全仓检索抗锯齿/TAA/MSAA 只命中 `MirrorCameraScript.cs:60`），玩家无从调整，所以由补丁接管。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
-
-`SuppressHeatHaze` 同样符合这条原则：全屏热浪扭曲没有任何游戏设置能关。安全性依据是它**纯视觉**——全仓检索 `_GlobalHazeAmount` 的 C# 读取只有 `DayNightManager.HazeDebug` 一处赋值（`:288`），而该字段在整个反编译全集里没有任何消费者，其余全部消费在 shader 内。代价明确且只在方山可见：热浪 shimmer 消失。这是研究报告判定的方山主因 A（Desert 渲染管线底座的全屏效果）中唯一能从代码侧直接消除的一项。
 
 ## 本轮修复的问题（变更说明）
 
@@ -225,7 +224,6 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Graphics.GraphicsBudgetEnabled` | `true` | 画质上限车道总开关；关闭即回滚本车道写过的值。 |
 | `Graphics.GraphicsDisableMsaa` | `true` | 关 MSAA 让 STP 生效（详见上文）。 |
 | `Graphics.GraphicsSkinWeightCap` | `2` | `QualitySettings.skinWeights` 上限（1/2/4/255）；其它值表示不限制。每顶点骨骼数直接随屏幕上的角色数放大。 |
-| `Graphics.SuppressHeatHaze` | `true` | 每 LateUpdate 把 `_GlobalHazeAmount` 写 0，消除方山全屏热浪扭曲；关闭时写回最后见到的非零值。 |
 
 诊断实现要点：详细诊断只对修复/回退原因计数，正常优化路径不记账；同一原因首次后最多每 30 秒输出一条聚合日志，不会逐帧刷屏。
 
@@ -235,6 +233,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 - 布尔补丁开关（`Fixes.*` 与 `Experimental.*` 中**已注册**的项）支持运行时热重载：在 BepInEx ConfigurationManager 里改值后立即 install/uninstall，无需重启。
 - 诊断开关和数值型配置（爆炸、远距 LOD、细节部件间隔）由运行时代码读取 `.Value`，修改后即时生效，无需 Harmony install/uninstall。
+- **两条非 Harmony 车道的热重载走轮询而非事件**：`Graphics.*` 与 `Experimental.CollisionCallbackReuse` 不是补丁开关，`ConfigFile.SettingChanged` 路径（可能在非主线程触发）刻意忽略它们；`Plugin.Update` 每帧各调一次它们的 `Update`/`Evaluate`，两者都幂等且在配置未变时只做一次配置读 + 早退。因此改值后 `Graphics.*` 最迟 2 秒生效（重申周期），`CollisionCallbackReuse` 下一帧生效。**关闭时会主动写回快照**：单独关 `GraphicsDisableMsaa` 或把 `GraphicsSkinWeightCap` 设为非法值也会各自还原，不需要整体关掉车道再打开。
 - 热切换在日志输出 `HotReload:` 一行，例如 `HotReload: <名称> enabled→installed` / `disabled→uninstalled`，失败或跳过则带 `Skipped*`/`Failed*` 与原因。每项切换独立隔离，失败只影响该项。
 - **风险提示**：唯一 Transpiler（`Fixes.BreakableBridge`）热切换风险最高——卸载/重装需要 Harmony 反向应用并重新编译 IL。若切换后出现异常或 `verified uninstall failed`，应重启游戏确认，不要在运行中反复切换。
 

@@ -198,12 +198,6 @@ namespace PeakSafeOptimizer.Config
         internal static ConfigEntry<int> GraphicsSkinWeightCap;
 
         /// <summary>
-        /// Forces the global <c>_GlobalHazeAmount</c> to zero every LateUpdate, removing Mesa's
-        /// full-screen air-distortion effect. See Graphics\HeatHazeSuppressor.
-        /// </summary>
-        internal static ConfigEntry<bool> SuppressHeatHaze;
-
-        /// <summary>
         /// True when the collision-callback reuse flag may be flipped. Plugin only applies it after
         /// both Snowball guards are confirmed installed, because the game caches one Collision
         /// reference across frames there.
@@ -350,12 +344,6 @@ namespace PeakSafeOptimizer.Config
                 "Upper bound for QualitySettings.skinWeights (1, 2, 4 or 255). Bones per vertex is " +
                 "the per-vertex cost of every skinned character, so this scales with how many " +
                 "players are on screen. Any other value disables this cap.");
-            SuppressHeatHaze = config.Bind("Graphics", "SuppressHeatHaze", true,
-                "Remove the full-screen heat-haze distortion by forcing the shader global " +
-                "_GlobalHazeAmount to 0. It is driven by the active segment's DayNightProfile and is " +
-                "only non-zero on Mesa/Desert, so this is a no-op elsewhere. Nothing in the game " +
-                "reads the value back - it is consumed by shaders only - and the last value seen is " +
-                "written back when this is turned off. The Mesa heat shimmer disappears.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");
             return new OptimizerConfig(patches, detailed);

@@ -24,7 +24,6 @@ namespace PeakSafeOptimizer
         private OptimizerConfig _settings;
         private PatchInstaller _installer;
         private GraphicsBudget _graphicsBudget;
-        private HeatHazeSuppressor _heatHaze;
         private CollisionCallbackReuse _collisionReuse;
         private int _mainThreadId;
         private readonly ConcurrentQueue<PatchId> _pendingSettingChanges = new ConcurrentQueue<PatchId>();
@@ -54,7 +53,6 @@ namespace PeakSafeOptimizer
 
                 // Non-Harmony lanes, both driven from Update and both restoring what they found.
                 _graphicsBudget = new GraphicsBudget(Logger);
-                _heatHaze = new HeatHazeSuppressor(Logger);
                 _collisionReuse = new CollisionCallbackReuse(Logger);
                 _collisionReuse.Evaluate(_installer);
 
@@ -134,15 +132,11 @@ namespace PeakSafeOptimizer
                 ApplySettingChange(id);
 
             _graphicsBudget?.Update(Time.unscaledDeltaTime);
-        }
-
-        /// <summary>
-        /// DayNightManager writes its shader globals from Update and from a blend coroutine, both of
-        /// which run before LateUpdate, so this is the frame's last writer without needing a patch.
-        /// </summary>
-        private void LateUpdate()
-        {
-            _heatHaze?.LateUpdate();
+            // Both non-Harmony lanes are polled rather than event driven. Their config entries are not
+            // patch toggles, so BepInEx' SettingChanged path (which may fire off the main thread)
+            // deliberately ignores them; polling makes hot reload work for them without a second queue.
+            // Evaluate is idempotent and early-outs on a config read plus two dictionary lookups.
+            _collisionReuse?.Evaluate(_installer);
         }
 
         private void ApplySettingChange(PatchId id)
@@ -171,10 +165,6 @@ namespace PeakSafeOptimizer
                     Logger.LogError($"HotReload: {id} {entry.Result}: {entry.Reason}");
                     break;
             }
-
-            // The Snowball guards gate the global collision-reuse flag, so re-decide after any toggle.
-            if (id == PatchId.SnowballContactSnapshot || id == PatchId.SnowballContactConsume)
-                _collisionReuse?.Evaluate(_installer);
         }
 
         private void OnDestroy()
@@ -244,16 +234,6 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Collision reuse shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
             }
             _collisionReuse = null;
-
-            try
-            {
-                _heatHaze?.Shutdown();
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError($"Heat haze shutdown failed safely: {ex.GetType().Name}: {ex.Message}");
-            }
-            _heatHaze = null;
 
             try
             {

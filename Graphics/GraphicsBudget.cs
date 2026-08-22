@@ -158,6 +158,12 @@ namespace PeakSafeOptimizer.Graphics
                         _wroteAntiAliasing = 0;
                     }
                 }
+                else
+                {
+                    // Turning one cap off has to hand that value back on its own, otherwise the only
+                    // way to undo it would be disabling the whole lane.
+                    RestoreMsaa(asset);
+                }
 
                 ApplySkinWeightCap();
                 _applied = true;
@@ -176,7 +182,11 @@ namespace PeakSafeOptimizer.Graphics
         {
             int cap = OptimizerConfig.GraphicsSkinWeightCap?.Value ?? 0;
             if (!TryMapSkinWeights(cap, out SkinWeights capped))
+            {
+                // Includes "cap turned off": hand the launch value back.
+                RestoreSkinWeights();
                 return;
+            }
             if (Rank(QualitySettings.skinWeights) > Rank(capped))
             {
                 QualitySettings.skinWeights = capped;
@@ -227,24 +237,40 @@ namespace PeakSafeOptimizer.Graphics
                 UniversalRenderPipelineAsset asset = ResolveAsset();
                 if (asset != null && asset.GetInstanceID() == _snapshotAssetId)
                 {
-                    // Only revert a cap this lane actually wrote, and only while the value is still the
-                    // one it wrote. Anything else is the user's or the game's own newer value.
-                    if (_wroteMsaaSampleCount != 0 && asset.msaaSampleCount == _wroteMsaaSampleCount)
-                        asset.msaaSampleCount = _snapshotMsaaSampleCount;
+                    RestoreMsaa(asset);
                 }
-                if (_wroteAntiAliasing >= 0 && QualitySettings.antiAliasing == _wroteAntiAliasing)
-                    QualitySettings.antiAliasing = _snapshotAntiAliasing;
-                if (_wroteAnySkinWeights && QualitySettings.skinWeights == _wroteSkinWeights)
-                    QualitySettings.skinWeights = _snapshotSkinWeights;
-                _wroteMsaaSampleCount = 0;
-                _wroteAntiAliasing = -1;
-                _wroteAnySkinWeights = false;
+                RestoreSkinWeights();
                 _log?.LogInfo($"PeakSafeOptimizer | graphics budget restored launch values ({reason}).");
             }
             catch (Exception ex)
             {
                 _log?.LogError($"Graphics budget restore failed safely: {ex.GetType().Name}: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Reverts the MSAA pair, but only where this lane wrote the value and the value is still the
+        /// one it wrote. Anything else is the user's or the game's own newer value and is left alone.
+        /// </summary>
+        private void RestoreMsaa(UniversalRenderPipelineAsset asset)
+        {
+            if (_wroteMsaaSampleCount != 0 && asset != null &&
+                asset.msaaSampleCount == _wroteMsaaSampleCount)
+            {
+                asset.msaaSampleCount = _snapshotMsaaSampleCount;
+            }
+            _wroteMsaaSampleCount = 0;
+
+            if (_wroteAntiAliasing >= 0 && QualitySettings.antiAliasing == _wroteAntiAliasing)
+                QualitySettings.antiAliasing = _snapshotAntiAliasing;
+            _wroteAntiAliasing = -1;
+        }
+
+        private void RestoreSkinWeights()
+        {
+            if (_wroteAnySkinWeights && QualitySettings.skinWeights == _wroteSkinWeights)
+                QualitySettings.skinWeights = _snapshotSkinWeights;
+            _wroteAnySkinWeights = false;
         }
 
         private UniversalRenderPipelineAsset ResolveAsset()

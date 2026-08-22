@@ -8,9 +8,9 @@
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认：**43 项有效补丁、三条非 Harmony 车道与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
+3. 第一层用出厂默认：**43 项有效补丁、两条非 Harmony 车道与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
 
-   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse`、`Graphics.*` 与 `Graphics.SuppressHeatHaze`。
+   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.*`。
 
 4. 准备一次不装插件的同场景基准（同人数/地点/操作序列）才能判断收益。
 
@@ -127,7 +127,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | E4 | `Fixes.CollisionContactsNoAlloc` + `Experimental.CollisionCallbackReuse` | 落地、踩冰面、踩弹床（蘑菇）、被仙人掌粘住、踩队友（Pal jump）、上桥踩断、火箭 | 全部触发效果与原版一致：弹床弹起、仙人掌扣血粘住、Pal jump 起跳、桥梁断裂、火箭爆炸。任一失效立刻关 `CollisionCallbackReuse` 复测，以区分是复用标志还是等价改写的问题。 |
 | E5 | `Fixes.SnowballContactSnapshot` + `Fixes.SnowballContactConsume` | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
 | E6 | `Graphics.*` | 启动后等 10 秒，进游戏看画面；再进设置菜单改一次「阴影距离」和「渲染缩放」 | 日志出现一行 `graphics budget snapshot:`，记录的应是**你自己的画质设置**而不是默认值；关掉 MSAA 后画面应更清晰（0.8 缩放由 STP 上采样），且日志不再刷 `Disabling TAA and STP because MSAA is on`；**阴影距离与级联数必须完全听游戏设置**（本车道已不再碰它们，走动时远处阴影形状不应变化）。把 `Graphics.GraphicsBudgetEnabled` 改为 `false`，画质应回到你的设置。 |
-| E7 | `Graphics.SuppressHeatHaze` | 方山白天站高处看远景；再去其它图（Beach/Alpine/Caldera）看一眼 | 方山热浪扭曲**完全消失**（原本地面上方的空气抖动感不再有）；日志出现一行 `heat haze suppressed: _GlobalHazeAmount was <非零值>`；其它图观感与原版无差别（该量为 0，写 0 是空操作）。把该项改为 `false`，热浪应在下一帧恢复。 |
 
 ### 2.5 组合长时
 
@@ -165,10 +164,9 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 2. `Experimental.DetailBodypartThrottle`
 3. `Fixes.BodypartMovementForceIdentity`
 4. `Experimental.CollisionCallbackReuse`（GC 维度，看帧时间毛刺而不是平均帧率）
-5. `Graphics.SuppressHeatHaze`（GPU 维度，方山全屏效果直击点）
-6. `Graphics.GraphicsBudgetEnabled`（GPU 维度，MSAA 与每顶点骨骼数）
+5. `Graphics.GraphicsBudgetEnabled`（GPU 维度，MSAA 与每顶点骨骼数）
 
-如果只有第 5、6 项关掉后帧率明显下降、前四项都无差别，那说明这个场景是 GPU bound，继续调 CPU 侧没有意义。反之则相反。这一步的判定力比任何单项收益都高。
+如果只有第 5 项关掉后帧率明显下降、前四项都无差别，那说明这个场景是 GPU bound，继续调 CPU 侧没有意义。反之则相反。这一步的判定力比任何单项收益都高。
 
 ### 3.7 人数阶梯
 
@@ -182,10 +180,9 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
 3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
-5. 仅关闭 `Graphics.SuppressHeatHaze`，同一位置同镜头对比——方山主因判定为 GPU 侧的全屏效果，这一项是直击点，判定力最高。
-6. 仅关闭 `Graphics.GraphicsBudgetEnabled`（MSAA 与每顶点骨骼数），同一位置同镜头对比。
+5. 仅关闭 `Graphics.GraphicsBudgetEnabled`（MSAA 与每顶点骨骼数），同一位置同镜头对比。
 
-研究结论已判定方山主因是 GPU 侧渲染管线底座（沙漠 DayNightProfile 的全屏效果 + 满强度阴影 + 无自动 LOD 的 8 套角色像素成本）。补丁能从代码侧碰的只有游戏没提供设置的那部分：`SuppressHeatHaze`（全屏热浪扭曲，主因 A 的直击点）、MSAA（关掉还顺带恢复 STP）与每顶点骨骼数。阴影距离/级联属于游戏自带设置，由你在菜单里调，补丁不再覆盖。
+方山主因在 GPU 侧。原先怀疑是 Desert `DayNightProfile` 的全屏效果，**已实测证伪**：`_GlobalHazeAmount` 运行时实际只有 0.016，几乎等于关闭，对应的热浪补丁已移除。当前判断指向 8 套角色的渲染成本（十几个 Renderer/人，其中 4-5 个是纯阴影重复网格，且游戏完全没有角色 LOD）。补丁能从代码侧碰的部分：MSAA（关掉还顺带恢复 STP）、每顶点骨骼数，以及待实现的近/中距角色 LOD。阴影距离/级联属于游戏自带设置，由你在菜单里调，补丁不再覆盖。
 
 ## 4. 第三层：逐项开关实验（每次只关/开一个）
 
