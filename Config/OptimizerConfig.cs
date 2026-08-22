@@ -3,6 +3,11 @@ using BepInEx.Configuration;
 
 namespace PeakSafeOptimizer.Config
 {
+    /// <summary>
+    /// One entry per independently gated patch. Every member has both a config binding in
+    /// <see cref="OptimizerConfig.Bind"/> and a registered PatchDefinition, so the generated config
+    /// file never advertises a switch that does nothing.
+    /// </summary>
     public enum PatchId
     {
         RunBasedValues,
@@ -26,22 +31,8 @@ namespace PeakSafeOptimizer.Config
         // destroyed (spectating/respawn/quit), removing a per-frame NullReferenceException flood
         // (2315 occurrences confirmed in-game).
         EmoteWheelGuard,
-        HeatEmission,
         Campfire,
-        MapHandler,
         BreakableBridge,
-        RopeRendering,
-        ShakyRock,
-        PlayerEyeLook,
-        WeightRefresh,
-        RavenPerch,
-        EruptionSpawner,
-        BeeSwarm,
-        ZombieManager,
-        SleepingZombie,
-        Tornado,
-        GloomVoiceConfuser,
-        MovingLava,
         // Scale lane (Lane E1): scan/redundant-write reduction for multiplayer player counts
         // and ground item counts. Each entry is registered and gated independently.
         HeatEmissionScan,
@@ -77,15 +68,6 @@ namespace PeakSafeOptimizer.Config
         // (several explosions close together in time and space) and a distance tier (explosions far
         // from the local viewpoint), both of which can only lower the caps further.
         ExplosionScale,
-        // ExplosionShaderWarmup is reserved and intentionally has no PatchDefinition. It used
-        // Shader.WarmupAllShaders() from a Postfix on Dynamite.Start, which is a global, blocking
-        // warm-up of every loaded shader and all of its variants - not a targeted warm-up of the
-        // explosion orb material. On a URP build with a large mod list that froze the main thread
-        // for long enough to look like a hang: spawning a single dynamite made the process stop
-        // responding. Confirmed in-game, so the implementation was removed. A targeted warm-up
-        // would need to touch only the orb material's shader variants, which cannot be expressed
-        // through the public Shader API without rendering something.
-        ExplosionShaderWarmup,
         // Scale lane, class-A strict-equivalence optimizations. All default-enabled. Each is an
         // independent redundant-work elimination with an exact structure check in Initialize.
         ItemDatabaseNameLookup,
@@ -258,33 +240,8 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.RopeSegmentGuard] = BindPatch(config, PatchId.RopeSegmentGuard, true),
                 [PatchId.IKItemGuard] = BindPatch(config, PatchId.IKItemGuard, true),
                 [PatchId.EmoteWheelGuard] = BindPatch(config, PatchId.EmoteWheelGuard, true),
-                // Reserved compatibility keys: no PatchDefinition is registered in the
-                // first-test baseline, even if a user manually changes these values.
-                [PatchId.HeatEmission] = BindPatch(config, PatchId.HeatEmission, false),
                 [PatchId.Campfire] = BindPatch(config, PatchId.Campfire, true),
-                [PatchId.MapHandler] = BindPatch(config, PatchId.MapHandler, false),
                 [PatchId.BreakableBridge] = BindPatch(config, PatchId.BreakableBridge, true),
-                // In-game test (BepInEx 5.4.23.3 + 21 mods incl. MMHOOK_Assembly-CSharp /
-                // MonoDetour / AutoHookGenPatcher): the 14-instruction owner LINQ pattern matched
-                // 0 times at runtime, so Initialize failed closed. The implementation was removed;
-                // this key is reserved and reports "no definition registered".
-                [PatchId.RopeRendering] = BindPatch(config, PatchId.RopeRendering, false),
-                [PatchId.ShakyRock] = BindExperimental(config, PatchId.ShakyRock),
-                [PatchId.PlayerEyeLook] = BindExperimental(config, PatchId.PlayerEyeLook),
-                [PatchId.WeightRefresh] = BindExperimental(config, PatchId.WeightRefresh),
-                [PatchId.RavenPerch] = BindExperimental(config, PatchId.RavenPerch),
-                // In-game test: the Transpiler produced invalid IL (HarmonyException: IL Compile
-                // Error) because the matched window ended on the trailing brtrue, which the
-                // replacement dropped, leaving the query bool unconsumed before a void ret. The
-                // implementation was removed; this key is reserved and reports
-                // "no definition registered".
-                [PatchId.EruptionSpawner] = BindExperimental(config, PatchId.EruptionSpawner),
-                [PatchId.BeeSwarm] = BindExperimental(config, PatchId.BeeSwarm),
-                [PatchId.ZombieManager] = BindExperimental(config, PatchId.ZombieManager),
-                [PatchId.SleepingZombie] = BindExperimental(config, PatchId.SleepingZombie),
-                [PatchId.Tornado] = BindExperimental(config, PatchId.Tornado),
-                [PatchId.GloomVoiceConfuser] = BindExperimental(config, PatchId.GloomVoiceConfuser),
-                [PatchId.MovingLava] = BindExperimental(config, PatchId.MovingLava),
                 [PatchId.HeatEmissionScan] = BindPatch(config, PatchId.HeatEmissionScan, true),
                 [PatchId.RagdollPhysicsMats] = BindPatch(config, PatchId.RagdollPhysicsMats, true),
                 [PatchId.ItemCollisionMode] = BindPatch(config, PatchId.ItemCollisionMode, true),
@@ -304,10 +261,6 @@ namespace PeakSafeOptimizer.Config
                     BindExperimental(config, PatchId.RemoteItemInterpolationThreshold, true),
                 [PatchId.EyeLookComponentCache] = BindExperimental(config, PatchId.EyeLookComponentCache, true),
                 [PatchId.ExplosionScale] = BindExperimental(config, PatchId.ExplosionScale, true),
-                // Reserved key with no PatchDefinition; see the enum comment. Kept false so that a
-                // stale config file cannot re-enable the removed global warm-up.
-                [PatchId.ExplosionShaderWarmup] =
-                    BindExperimental(config, PatchId.ExplosionShaderWarmup, false),
                 [PatchId.ItemDatabaseNameLookup] = BindPatch(config, PatchId.ItemDatabaseNameLookup, true),
                 [PatchId.IsLookedAtScan] = BindPatch(config, PatchId.IsLookedAtScan, true),
                 [PatchId.ItemAudioManagerHash] = BindPatch(config, PatchId.ItemAudioManagerHash, true),
@@ -409,7 +362,7 @@ namespace PeakSafeOptimizer.Config
         private static ConfigEntry<bool> BindPatch(ConfigFile config, PatchId id, bool defaultValue) =>
             config.Bind("Fixes", id.ToString(), defaultValue, $"Enable the independent {id} optimization/fix lane.");
 
-        private static ConfigEntry<bool> BindExperimental(ConfigFile config, PatchId id, bool defaultValue = false) =>
+        private static ConfigEntry<bool> BindExperimental(ConfigFile config, PatchId id, bool defaultValue) =>
             config.Bind("Experimental", id.ToString(), defaultValue, $"Enable the independent experimental {id} lane.");
     }
 }

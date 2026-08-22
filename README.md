@@ -39,7 +39,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - `SkippedIlMismatch`：IL 匹配或 IL 生成拒绝当前构建。
 - `SkippedUncertifiedBuild`：补丁尚未具备方法级行为指纹，当前 MVID 未认证。
 - `FailedInitialize` / `FailedPatch`：真正的初始化或安装故障。
-- 其余见 `SkippedDisabled`（配置关闭）、`SkippedNoDefinition`（保留键未注册）等。
+- 其余见 `SkippedDisabled`（配置关闭）等。
 
 每个补丁支持 `reset`（热卸载成功后清理静态/缓存状态），卸载顺序为「全部 Unpatch 成功 → Reset → 删记录」，避免留下悬空访问器或半卸载状态。
 
@@ -60,7 +60,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 ## 已注册补丁（44 项，全部默认开启）
 
-当前是私人集中测试配置：44 个有实现的补丁、两条非 Harmony 车道（`Graphics.*` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。15 个无实现或已撤下的保留键仍默认关闭，不会重新启用已确认危险的旧实现。下表「默认」列均为补丁开关默认值。
+当前是私人集中测试配置：44 个有实现的补丁、两条非 Harmony 车道（`Graphics.*` 与 `Experimental.CollisionCallbackReuse`）与 `Diagnostics.DetailedLogging` 全部默认开启。配置文件里的每一个开关都对应一个真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为补丁开关默认值。
 
 ### 稳定性修复（`Patches\Stability`，6 项）
 
@@ -176,27 +176,27 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - 与其它补丁共享目标的新补丁（`RemoteClusterAnimationThrottle` 对 `CharacterRagdoll.FixedUpdate`、`BodypartMovementForceIdentity` 对 `Bodypart.AddMovementForce`）都读 `__runOriginal`：先前的 Prefix 已决定跳过时，本补丁不做任何事，两条车道互斥而非叠加。
 - 项目新增对 `UnityEngine.PhysicsModule`、`UnityEngine.AnimationModule`、`Unity.Animation.Rigging`、URP 与 `PhotonRealtime` 的只读引用（`Private=false`），此前用发射访问器绕开这些类型只是因为缺引用。
 
-## 保留配置键但未注册的项
+## 曾经尝试后移除的实现
 
-以下 15 个键没有 `PatchDefinition`。默认均为 `false`，启动时显示 `disabled by configuration`；若改为 `true`，则显示 `no definition registered`，不安装任何补丁：
+以下 15 项曾作为「保留配置键」留在配置文件里（无 `PatchDefinition`，置 `true` 也只输出 `no definition registered`）。这会让配置文件看起来像功能清单而不是变更记录，已全部从 `PatchId` 与配置绑定中删除。此处仅作记录，配置文件不再出现这些键。
 
-| 配置键 | 默认 | 未注册原因 |
-|---|---:|---|
-| `Fixes.HeatEmission` | `false` | 目标由 `HeatEmissionScan` 覆盖。 |
-| `Fixes.MapHandler` | `false` | 旧索引/硬编码局部可能破坏结算与切机场。 |
-| `Fixes.RopeRendering` | `false` | 依赖 14 条含编译器 selector 缓存字段的连续 IL，运行时匹配 0，无法证明唯一。 |
-| `Experimental.ShakyRock` | `false` | NonAlloc 替换与 foreach/异常区/`ComputePenetration` 语义耦合。 |
-| `Experimental.PlayerEyeLook` | `false` | stale target / 已销毁对象风险，目标由 `EyeLookComponentCache` 覆盖。 |
-| `Experimental.WeightRefresh` | `false` | 缺少可靠帧末 RPC 合并调度点，目标由 `WeightRefreshCoalescing` 覆盖。 |
-| `Experimental.RavenPerch` | `false` | 玩家扫描与 FlyAway/生成/视角决策交织。 |
-| `Experimental.EruptionSpawner` | `false` | Transpiler 生成无效 IL（HarmonyException: IL Compile Error）。 |
-| `Experimental.BeeSwarm` | `false` | acquisition 扫描与 owner/TryDeAggro/蜂巢即时响应耦合。 |
-| `Experimental.ZombieManager` | `false` | 清理优先级与 `maxActiveZombies` 顺序不应被降频改变。 |
-| `Experimental.SleepingZombie` | `false` | 唤醒扫描与可见性/视线/状态转换耦合，目标由 `SleepingZombieScan` 覆盖。 |
-| `Experimental.Tornado` | `false` | 多客户端 raycast 缓存可能分叉。 |
-| `Experimental.GloomVoiceConfuser` | `false` | 复杂 Update 同时处理主机转换/分配清理/偷取表现/elapsed timer。 |
-| `Experimental.MovingLava` | `false` | 未证明 scene view/owner 为空/主机迁移下的唯一权威规则。 |
-| `Experimental.ExplosionShaderWarmup` | `false` | `Shader.WarmupAllShaders()` 会全局阻塞预热全部 shader 变体，已实测导致生成炸药时主线程冻结，实现已删除。 |
+| 名称 | 移除原因 |
+|---|---|
+| `HeatEmission` | 目标由 `HeatEmissionScan` 覆盖。 |
+| `MapHandler` | 旧索引/硬编码局部可能破坏结算与切机场。 |
+| `RopeRendering` | 依赖 14 条含编译器 selector 缓存字段的连续 IL，运行时匹配 0，无法证明唯一。 |
+| `ShakyRock` | NonAlloc 替换与 foreach/异常区/`ComputePenetration` 语义耦合。 |
+| `PlayerEyeLook` | stale target / 已销毁对象风险，目标由 `EyeLookComponentCache` 覆盖。 |
+| `WeightRefresh` | 缺少可靠帧末 RPC 合并调度点，目标由 `WeightRefreshCoalescing` 覆盖。 |
+| `RavenPerch` | 玩家扫描与 FlyAway/生成/视角决策交织。 |
+| `EruptionSpawner` | Transpiler 生成无效 IL（HarmonyException: IL Compile Error）。 |
+| `BeeSwarm` | acquisition 扫描与 owner/TryDeAggro/蜂巢即时响应耦合。 |
+| `ZombieManager` | 清理优先级与 `maxActiveZombies` 顺序不应被降频改变。 |
+| `SleepingZombie` | 唤醒扫描与可见性/视线/状态转换耦合，目标由 `SleepingZombieScan` 覆盖。 |
+| `Tornado` | 多客户端 raycast 缓存可能分叉。 |
+| `GloomVoiceConfuser` | 复杂 Update 同时处理主机转换/分配清理/偷取表现/elapsed timer。 |
+| `MovingLava` | 未证明 scene view/owner 为空/主机迁移下的唯一权威规则。 |
+| `ExplosionShaderWarmup` | `Shader.WarmupAllShaders()` 会全局阻塞预热全部 shader 变体，已实测导致生成炸药时主线程冻结。 |
 
 没有 `EnableAllExperimental` 或任何批量开关；每项必须单独决定。
 
@@ -234,7 +234,6 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 - 布尔补丁开关（`Fixes.*` 与 `Experimental.*` 中**已注册**的项）支持运行时热重载：在 BepInEx ConfigurationManager 里改值后立即 install/uninstall，无需重启。
 - 诊断开关和数值型配置（爆炸、远距 LOD、细节部件间隔）由运行时代码读取 `.Value`，修改后即时生效，无需 Harmony install/uninstall。
 - 热切换在日志输出 `HotReload:` 一行，例如 `HotReload: <名称> enabled→installed` / `disabled→uninstalled`，失败或跳过则带 `Skipped*`/`Failed*` 与原因。每项切换独立隔离，失败只影响该项。
-- 未注册键改为 `true` 时输出 `HotReload: <名称> enabled→SkippedNoDefinition: no definition registered`，不安装任何补丁。
 - **风险提示**：唯一 Transpiler（`Fixes.BreakableBridge`）热切换风险最高——卸载/重装需要 Harmony 反向应用并重新编译 IL。若切换后出现异常或 `verified uninstall failed`，应重启游戏确认，不要在运行中反复切换。
 
 ## 构建与安装

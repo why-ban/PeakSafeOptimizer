@@ -1,6 +1,6 @@
 # PeakSafeOptimizer 0.1.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**39 项有效补丁与详细诊断默认开启**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。15 个无实现保留键保持默认关闭。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**44 项有效补丁与详细诊断默认开启**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
@@ -8,9 +8,9 @@
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认：**39 项有效补丁与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
+3. 第一层用出厂默认：**44 项有效补丁、两条非 Harmony 车道与 `Diagnostics.DetailedLogging` 全部默认开启**。默认开启项为：
 
-   `RunBasedValues`、`Parachute`、`BugleClipGuard`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`。
+   `RunBasedValues`、`Parachute`、`BugleClipGuard`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.*`。
 
 4. 准备一次不装插件的同场景基准（同人数/地点/操作序列）才能判断收益。
 
@@ -20,12 +20,10 @@
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=59, applied=44, skipped=15, failed=0, module-failures=0`（`enabled` 视 cfg 中保留键是否被手动置 true）。
-  - `registered=59` = 44 个真实补丁 + 15 个保留占位键。
-  - `applied=39` 是真正的有效值；`skipped=15` 对应 15 个保留键（默认 `false` 时 `disabled by configuration`，手动置 `true` 时 `no definition registered`）。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=44, applied=44, enabled=44, skipped=0, failed=0, module-failures=0`。
+  - 每个开关都对应一个真实注册的补丁，没有只显示不生效的键，所以 `registered` 与 `applied` 应当相等。
 - 逐项结果三类行：
-  - `applied  : <名称> [<兼容等级>] <目标方法>`（39 行，兼容等级为 Structural/Fingerprint/StrictIl）。
-  - `skipped  : <名称> [n/a] SkippedDisabled / SkippedNoDefinition`（15 行保留键）。
+  - `applied  : <名称> [<兼容等级>] <目标方法>`（44 行，兼容等级为 Structural/Fingerprint/StrictIl）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
 - 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
@@ -51,7 +49,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 1. 进游戏后，在 ConfigurationManager 里把一个默认开启的 Prefix 补丁（例如 `Fixes.ItemCollisionMode`）关掉再打开。
 2. 观察日志：应出现 `HotReload: ItemCollisionMode disabled→uninstalled` 与 `HotReload: ItemCollisionMode enabled→installed`。
 3. 把另一个默认开启的 `Experimental.*` 补丁（例如 `Experimental.ExplosionScale`）关掉再打开，观察同格式两行。
-4. 把一个未注册键（例如 `Fixes.RopeRendering`）改为 `true`：应输出 `HotReload: RopeRendering enabled→SkippedNoDefinition: no definition registered`，且不产生任何实际补丁。
 5. 对唯一 Transpiler（`Fixes.BreakableBridge`）做一次开关，观察是否仍正常工作；若出现 `InvalidProgramException` 或 `verified uninstall failed`，立即重启确认，不要在运行中反复切换它。
 6. 值类型配置（`Diagnostics.DetailedLogging`、爆炸集群/距离参数、远端 LOD 距离、`DetailBodypartThrottleInterval`）改值后即时生效，无需热重载动作。
 
@@ -59,7 +56,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 崩溃/卡死/无限加载/掉线循环；存档异常；场景切换/机场/结算/复活/重连异常；网络状态分叉（桥梁人数、营火范围、物品位置/尺寸长期不一致）；地面物品卡住/抖动/无法拾取/尺寸卡住；负重/荆棘/箭矢数值错误；打滑抓地突变；嘴部贴图卡在说话帧；名字牌长期不消失；日志高速增长或 `InvalidProgramException`。
 
-回滚顺序：先关最近启用的单项，再逐项关闭 39 项默认开启定位，最后无插件复现确认是否原版问题。
+回滚顺序：先关最近启用的单项，再逐项关闭默认开启项定位，最后无插件复现确认是否原版问题。
 
 ## 2. 第一层：默认配置安全性（44 项全开）
 
@@ -216,7 +213,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 6. 已安装其它模组清单；队伍中是否有人装自定义军号曲目模组。
 7. 网络/渲染问题需房主与客户端同期日志。
 
-检索关键词：`PeakSafeOptimizer`、`compatibility mode`、`MVID`、`applied`、`skipped`、`failed`、`SkippedStructureMismatch`、`SkippedIlMismatch`、`SkippedUncertifiedBuild`、`SkippedNoDefinition`、`no definition registered`、`Harmony`、`InvalidProgramException`、`NullReferenceException`、`ArgumentOutOfRangeException`、`IndexOutOfRangeException`、`Repair reason`、`HotReload`、`verified uninstall`。
+检索关键词：`PeakSafeOptimizer`、`compatibility mode`、`MVID`、`applied`、`skipped`、`failed`、`SkippedStructureMismatch`、`SkippedIlMismatch`、`SkippedUncertifiedBuild`、`Harmony`、`InvalidProgramException`、`NullReferenceException`、`ArgumentOutOfRangeException`、`IndexOutOfRangeException`、`Repair reason`、`HotReload`、`verified uninstall`。
 
 ## 6. 结果记录模板
 
@@ -243,6 +240,6 @@ BepInEx 版本 / 其它模组数量：
 
 - 单人/多人异常修复已实测；多人压力基准与长时稳定性未完成。
 - 插件不提供帧率计数，流畅度请外部工具或主观记录并与无插件基准对比。
-- 未注册键设为 `true` 也不安装（`no definition registered`），不能用来「修复」。
 - 单项失败被隔离，报告写明具体项与原因。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
+- 本轮新增的 5 项补丁与 2 条非 Harmony 车道（见 2.6）同样尚未完成游戏内验证。
