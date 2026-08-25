@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
 
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
@@ -57,14 +56,16 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             RemoteRagdollLod.Release();
         }
 
-        internal static bool Prefix(Bodypart __instance)
+        internal static bool Prefix(Bodypart __instance, bool __runOriginal)
         {
+            // BodypartMovementForceIdentity shares this target.
+            if (!__runOriginal)
+                return false;
+
             Character owner = RemoteRagdollLod.ResolveOwner(__instance);
+            // No diagnostics: reachable once per bodypart per physics step.
             if (owner == null)
-            {
-                RateLimitedDiagnostics.Hit("RemoteRagdollLodMovementForce.owner-unresolved");
                 return true;
-            }
             return !RemoteRagdollLod.ShouldDowngrade(owner);
         }
     }

@@ -53,11 +53,12 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
   - `GUIManager.get_canEmote → UpdateEmoteWheel → LateUpdate` 每帧 `NullReferenceException`（2315 次）——已由 `Fixes.EmoteWheelGuard` 对 localCharacter/data/refs/stats 不完整窗口进行防御。当前反编译原版 LateUpdate 已有外层 localCharacter 守卫，因此仍需实机日志确认历史异常究竟来自成员级空窗还是第三方直接调用。
   - `CharacterItems.GetItemPosRight → CharacterAnimations.ConfigureIK → CharacterRagdoll.FixedUpdate` 每帧 `NullReferenceException`（135 次）——已由 `Fixes.IKItemGuard` 消除。
 - 由其它模组造成的异常与卡顿不在本插件职责范围内。例如 13 次 `RPC method 'RPC_SetSongByName(String)' not found` 来自其他玩家安装的自定义军号曲目模组；`BugleSFX.Update` 的越界索引同样源于此，曾经有过守卫（`BugleClipGuard`），已按此原则移除。
+- **原版每帧抛异常的路径在范围内**。一次异常意味着抛出 + 堆栈捕获 + 字符串格式化 + BepInEx 的同步写盘，全在主线程；每帧一次就是可观的持续开销，不只是日志噪声。`BinocularSunGuard`（1544 次）与 `ItemOptimizerDeregisterGuard`（67 次）就是按这条标准加的。
 - 排查本插件问题请按 `PeakSafeOptimizer` 关键字过滤，避免与其它模组（如 `PeakStatsEx`、`PEAK_Visuals`）产生的异常混淆。
 
 仍未完成：多人压力基准、长时稳定性、性能基准。本文不提供任何帧率数字。
 
-## 已注册补丁（41 个补丁 / 37 个开关）
+## 已注册补丁（45 个补丁 / 41 个开关）
 
 配置文件里的每一个开关都对应真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为开关默认值。
 
@@ -65,9 +66,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 默认关闭的项：`Experimental.RemoteRagdollLod`（一个开关 = 4 个补丁，远距姿态凝固）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）、`Graphics.CapBoneWeights`（关节形变变糙）、`Experimental.CollisionCallbackReuse`（进程级引擎标志）。
 
-**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 41 个补丁对应 37 个开关。
+**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 45 个补丁对应 41 个开关。
 
-### 稳定性修复（`Patches\Stability`，5 项，全部默认开启）
+### 稳定性修复（`Patches\Stability`，7 项，全部默认开启）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
@@ -76,6 +77,10 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.RopeSegmentGuard` | `true` | Fingerprint | Prefix：`CharacterRopeHandling.Climbing()` | 当所持绳索的 `GetRopeSegments()` 为 null/空，或 `climbingAPI` 为 null 时跳过该帧攀爬。守卫每帧入口而非底层 API，避免把异常换成 `NullReferenceException`。 |
 | `Fixes.IKItemGuard` | `true` | Fingerprint | Prefix：`CharacterAnimations.ConfigureIK()` | 当 `currentItem` 非空但 prefab 缺 `Hand_R`/`Hand_L` 子节点时跳过该帧手部 IK 定位。只在手部节点缺失时跳过，ReachIK 分支不受影响。 |
 | `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | 当 `Character.localCharacter`、data、refs 或 stats 在观战/重生/退出/第三方调用窗口中不完整时跳过表情轮更新。只读不写。 |
+| `Fixes.BinocularSunGuard` | `true` | Fingerprint | Prefix：`Action_ShowBinocularOverlay.TestLookAtSun()` | 举起望远镜时该方法每帧执行，而原版只判了 `localCharacter`，随后无保护地解引用 `Singleton<MapHandler>.Instance` 与 `DayNightManager.instance.sun`（`Action_ShowBinocularOverlay.cs:40-42`）。实测单局 1544 次逐帧空引用。守卫补齐这三处判空，跳过的唯一后果是该帧不做天文成就判定。 |
+| `Fixes.ItemOptimizerDeregisterGuard` | `true` | Fingerprint | Prefix：`Peak.ItemOptimizationManager.DeregisterItem(Item)` | 原版 `ItemOptimizer.OnEnable` 在 item 为 null 时写 `enabled = false`，该写入同步触发 `OnDisable`，后者拿同一个 null 去 `Dictionary.Remove` 并抛 `ArgumentNullException`（`ItemOptimizer.cs:9-24`）。实测 67 次。null 键本就不在字典里，跳过不丢任何条目。 |
+| `Fixes.StatusEmitterScan` | `true` | Fingerprint | Prefix（完整替换）：`StatusEmitter.Update()` | 沼泽/丛林的孢子毒气伤害体积，场景里**每个实例每帧无条件执行**，自身没有距离门控。原版每帧 2–4 次开方距离 + 2–4 次 `partDict` 字典查找解析 `localCharacter.Center`，命中范围时还要做一次字符串键字典查找。本版把范围判定改平方比较（非负数下同侧）、Center 每次调用只解析一次、精确距离只在伤害公式真正需要时开方，重叠优先级字典仅在范围内触碰。伤害公式、`debug` 字段写入与 `AddStatus`/`SubtractStatus` 逐行复刻（含原版复用 `amount` 而非衰减后 `num` 这一处，照抄不改）。`InRange` 是 virtual，Initialize 会扫描全部子类确认无人 override，否则 fail-closed。 |
+| `Fixes.ParticleCountCullerWrite` | `true` | Fingerprint | Prefix（完整替换）：`ParticleCountCuller.Update()` | 孢子云/蘑菇云的距离衰减组件。原版每帧无条件写 `emission.rateOverTimeMultiplier`（native 调用），且**没有 `Character.observedCharacter` 判空**——角色存在前每帧每实例抛 NRE（对比 `ParticleCuller.cs:37-40` 与 `PlayerTrackParticles.cs:34-37` 都判了）。本版补上判空，并只在乘数真正变化时写入；算术逐位保持原样（含 `maxDistance` 被当除数而非区间上界这一处，因为 `attenuationVal` 是序列化字段，场景可能按它调过）。纯视觉：该字段与发射率在全仓没有其它读取者。 |
 
 ### 等价改写（`Patches\Equivalent`，1 项）
 
@@ -239,7 +244,7 @@ dotnet build -c Release
 ## 当前限制
 
 - 完成的是构建、结构验证与严格 IL 自检；**多人压力基准、长时稳定性与性能基准仍未完成**，不给帧率数值承诺。
-- `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未完成游戏内验证；若目标构建结构不符会各自 fail-closed 单独跳过，不影响其余补丁。
+- `CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未完成游戏内验证；若目标构建结构不符会各自 fail-closed 单独跳过，不影响其余补丁。
 - 有观感/行为代价的项已全部改为**默认关闭**，需要自行开启并亲眼确认：6 项远端动画降频（`RemoteClusterAnimationThrottle`、`DetailBodypartThrottle`、`RemoteRagdollLod` 一个开关下的 4 项）、`Graphics.CapBoneWeights`，以及全局引擎标志 `Experimental.CollisionCallbackReuse`。
 - `CollisionCallbackReuse` 是**引擎全局标志**。游戏侧唯一的跨帧 `Collision` 引用已定位并加守卫，已装的 20 个模组 DLL 元数据里也没有任何 `OnCollisionEnter/Stay/Exit`（除 MMHOOK 自动生成的 hook 库），但第三方模组仍是唯一无法静态穷尽的面。装机后滚一颗雪球确认它还能变大即可覆盖这条路径。
 - 长序列 IL 模式在多模组预处理环境不可靠；后续新增补丁优先窄 Prefix + 精确结构验证。

@@ -93,7 +93,13 @@ namespace PeakSafeOptimizer.Patches.Stability
             Player player = character.player;
             if (player == null)
             {
-                RateLimitedDiagnostics.Hit("Parachute.player-null-or-destroyed");
+                // Bots have no Photon Player, so Character.player - a PlayerHandler lookup keyed by
+                // view.Owner.ActorNumber (Character.cs:201, PlayerHandler.cs:206-209) - is null for
+                // them by design, on every frame. That is not a fault and must not be accounted as a
+                // repair reason: 1899 hits in one session were all bots. The held-item branch above
+                // still runs first, because a bot can carry a parachute.
+                if (!character.isBot)
+                    RateLimitedDiagnostics.Hit("Parachute.player-null-or-destroyed");
                 return false;
             }
 
@@ -177,6 +183,8 @@ namespace PeakSafeOptimizer.Patches.Stability
         {
             StabilityPatchValidation.RequireInstanceField(
                 typeof(Character), "isScoutmaster", typeof(bool));
+            StabilityPatchValidation.RequireInstanceField(
+                typeof(Character), "isBot", typeof(bool));
             StabilityPatchValidation.RequireInstanceField(
                 typeof(Character), "data", typeof(CharacterData));
             StabilityPatchValidation.RequireInstanceProperty(

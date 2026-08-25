@@ -4,7 +4,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
 using PeakSafeOptimizer.Config;
-using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
 using Photon.Pun;
 using UnityEngine;
@@ -185,7 +184,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef = _grabbingPlayer;
             if (states == null || grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
             {
-                RateLimitedDiagnostics.Hit("RemoteRagdollLod.accessors-unavailable");
+                // No diagnostics: this is reached from Bodypart.Animate and Bodypart.AddMovementForce,
+                // i.e. once per bodypart per physics step, so a Hit here would turn a missing accessor
+                // into a per-part dictionary lookup and Interlocked on every call. Installation
+                // failures are already reported by the installer.
                 return false;
             }
             if (c == null)

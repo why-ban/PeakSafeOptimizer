@@ -203,8 +203,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// this patch removes. Initialize/Reset failures are already reported by the installer.
         /// </summary>
         [HarmonyPriority(Priority.Low)]
-        internal static bool Prefix(Bodypart __instance)
+        internal static bool Prefix(Bodypart __instance, bool __runOriginal)
         {
+            // RemoteRagdollLodAnimate shares this target and runs first (Priority.High). When it has
+            // already decided to skip, there is nothing left to decide and no reason to pay for the
+            // per-part tick math, the instance-id modulo and the per-character table lookup below.
+            if (!__runOriginal)
+                return false;
+
             bool[] table = _detailParts;
             AccessTools.FieldRef<Bodypart, BodypartType> partTypeRef = _partType;
             if (table == null || partTypeRef == null || __instance == null)

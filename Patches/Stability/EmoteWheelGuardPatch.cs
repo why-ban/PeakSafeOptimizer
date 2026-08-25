@@ -17,6 +17,12 @@ namespace PeakSafeOptimizer.Patches.Stability
     ///
     /// This Prefix is read-only: it checks the complete member chain with Unity object semantics and
     /// skips the original when any dependency is unavailable. It never writes state.
+    ///
+    /// The three members are reported separately, because which one is missing identifies the cause.
+    /// GUIManager.LateUpdate already guards localCharacter itself (GUIManager.cs:353) and dereferences
+    /// localCharacter.data two lines before the call (:363), so in practice a hit here means
+    /// refs or refs.stats is missing - i.e. the local character is mid-rebuild or another mod has
+    /// replaced it. Note this can never be a bot: localCharacter is the local player by definition.
     /// </summary>
     internal static class EmoteWheelGuardPatch
     {
@@ -56,18 +62,33 @@ namespace PeakSafeOptimizer.Patches.Stability
         internal static bool Prefix()
         {
             // Unity null semantics: false for both a null reference and a destroyed object.
-            if ((bool)Character.localCharacter)
+            Character local = Character.localCharacter;
+            if (!(bool)local)
             {
-                Character local = Character.localCharacter;
-                if (local.data != null && local.refs != null && local.refs.stats != null)
-                    return true;
-
-                RateLimitedDiagnostics.Hit("EmoteWheelGuard.localCharacter-members-unavailable");
+                RateLimitedDiagnostics.Hit("EmoteWheelGuard.localCharacter-unavailable");
                 return false;
             }
 
-            RateLimitedDiagnostics.Hit("EmoteWheelGuard.localCharacter-unavailable");
-            return false;
+            if (local.data == null)
+            {
+                RateLimitedDiagnostics.Hit("EmoteWheelGuard.data-unavailable");
+                return false;
+            }
+
+            Character.CharacterRefs refs = local.refs;
+            if (refs == null)
+            {
+                RateLimitedDiagnostics.Hit("EmoteWheelGuard.refs-unavailable");
+                return false;
+            }
+
+            if (refs.stats == null)
+            {
+                RateLimitedDiagnostics.Hit("EmoteWheelGuard.stats-unavailable");
+                return false;
+            }
+
+            return true;
         }
     }
 }

@@ -1,7 +1,6 @@
 using System;
 using System.Reflection;
 using HarmonyLib;
-using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
 
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
@@ -59,16 +58,18 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         }
 
         [HarmonyPriority(Priority.High)]
-        internal static bool Prefix(Bodypart __instance)
+        internal static bool Prefix(Bodypart __instance, bool __runOriginal)
         {
+            if (!__runOriginal)
+                return false;
+
             Character owner = RemoteRagdollLod.ResolveOwner(__instance);
+            // Bodypart.character is assigned in Bodypart.Start; before that, or on a stray part
+            // without a Character parent, the original must run unchanged. No diagnostics: this is
+            // reachable once per bodypart per physics step, so accounting it would cost more than the
+            // work this patch removes.
             if (owner == null)
-            {
-                // Bodypart.character is assigned in Bodypart.Start; before that, or on a stray part
-                // without a Character parent, the original must run unchanged.
-                RateLimitedDiagnostics.Hit("RemoteRagdollLodAnimate.owner-unresolved");
                 return true;
-            }
             return !RemoteRagdollLod.ShouldDowngrade(owner);
         }
     }

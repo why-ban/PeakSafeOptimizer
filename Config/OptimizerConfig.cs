@@ -133,7 +133,27 @@ namespace PeakSafeOptimizer.Config
         // Scale lane: skips Bodypart.AddMovementForce when the force it would accumulate is exactly
         // the zero vector, which is the case for every part of every character that is not pressing a
         // movement key - i.e. everyone standing in a cluster.
-        BodypartMovementForceIdentity
+        BodypartMovementForceIdentity,
+        // Stability lane: guards Action_ShowBinocularOverlay.TestLookAtSun(), reached every frame
+        // from Update while anyone holds raised binoculars. Vanilla only null-checks
+        // Character.localCharacter and then dereferences Singleton<MapHandler>.Instance and
+        // DayNightManager.instance.sun unguarded (Action_ShowBinocularOverlay.cs:40-42). Confirmed
+        // in-game: 1544 NullReferenceException in one session, i.e. one per frame while raised.
+        BinocularSunGuard,
+        // Stability lane: guards Peak.ItemOptimizationManager.DeregisterItem(Item) against a null
+        // item. ItemOptimizer.OnEnable writes `enabled = false` when its item is null
+        // (ItemOptimizer.cs:9-19), which synchronously invokes OnDisable, which calls
+        // DeregisterItem(null), and Dictionary.Remove(null) throws. Confirmed in-game: 67 times.
+        ItemOptimizerDeregisterGuard,
+        // Scale lane: equivalent replacement of StatusEmitter.Update(), which every spore-gas volume
+        // in the level runs every frame with no distance gate of its own. Squares the range test,
+        // resolves the local character's Center once instead of two to four times, and only touches
+        // the string-keyed overlap dictionary while actually in range.
+        StatusEmitterScan,
+        // Scale lane: skips the per-frame emission write of ParticleCountCuller when the attenuation
+        // it computed is unchanged, and guards the missing Character.observedCharacter null check that
+        // makes vanilla throw every frame before a character exists.
+        ParticleCountCullerWrite
     }
 
     public sealed class OptimizerConfig
@@ -250,7 +270,15 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.CollisionContactsNoAlloc] =
                     BindPatch(config, PatchId.CollisionContactsNoAlloc, true),
                 [PatchId.BodypartMovementForceIdentity] =
-                    BindPatch(config, PatchId.BodypartMovementForceIdentity, true)
+                    BindPatch(config, PatchId.BodypartMovementForceIdentity, true),
+                [PatchId.BinocularSunGuard] =
+                    BindPatch(config, PatchId.BinocularSunGuard, true),
+                [PatchId.ItemOptimizerDeregisterGuard] =
+                    BindPatch(config, PatchId.ItemOptimizerDeregisterGuard, true),
+                [PatchId.StatusEmitterScan] =
+                    BindPatch(config, PatchId.StatusEmitterScan, true),
+                [PatchId.ParticleCountCullerWrite] =
+                    BindPatch(config, PatchId.ParticleCountCullerWrite, true)
             };
 
             // Groups: sets of patches that are only correct together, so they get one switch each

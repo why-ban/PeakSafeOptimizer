@@ -7,6 +7,8 @@ namespace PeakSafeOptimizer.Patches.Stability
     {
         private const BindingFlags DeclaredInstance = BindingFlags.Instance |
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        private const BindingFlags DeclaredStatic = BindingFlags.Static |
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
         internal static FieldInfo RequireInstanceField(Type declaringType, string name, Type fieldType)
         {
@@ -59,6 +61,42 @@ namespace PeakSafeOptimizer.Patches.Stability
             {
                 throw new InvalidOperationException(
                     $"Unexpected method structure for {declaringType.FullName}.{name}");
+            }
+
+            ParameterInfo[] actualParameters = method.GetParameters();
+            if (actualParameters.Length != parameterTypes.Length)
+                throw new InvalidOperationException(
+                    $"Unexpected parameter count for {declaringType.FullName}.{name}");
+            for (int i = 0; i < actualParameters.Length; i++)
+            {
+                if (actualParameters[i].ParameterType != parameterTypes[i])
+                    throw new InvalidOperationException(
+                        $"Unexpected parameter {i} for {declaringType.FullName}.{name}");
+            }
+            return method;
+        }
+
+        internal static MethodInfo RequireStaticMethod(
+            Type declaringType,
+            string name,
+            Type returnType,
+            Type[] parameterTypes,
+            bool requirePublic = true)
+        {
+            MethodInfo method = declaringType.GetMethod(
+                name,
+                DeclaredStatic,
+                null,
+                parameterTypes,
+                null);
+            if (method == null)
+                throw new MissingMethodException(declaringType.FullName, name);
+            if (method.DeclaringType != declaringType || !method.IsStatic ||
+                method.ReturnType != returnType || method.ContainsGenericParameters ||
+                (requirePublic && !method.IsPublic))
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected static method structure for {declaringType.FullName}.{name}");
             }
 
             ParameterInfo[] actualParameters = method.GetParameters();

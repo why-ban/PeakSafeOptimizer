@@ -56,7 +56,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///     pose (CharacterRagdoll.cs:204-238). Its outputs - data.targetHeadHeight,
     ///     data.targetHipHeight and the animation helper transforms - therefore keep the value from
     ///     the last evaluation, at most N-1 ticks old, instead of being recomputed from a physics
-    ///     pose they were never meant to describe.
+    ///     pose they were never meant to describe. Recomputing them there would assign the current
+    ///     sagging height to the value Stand() treats as its target (CharacterMovement.cs:689-698),
+    ///     which drives the standing force to zero and makes the sag self-reinforcing.
     ///   * SetPhysicsMats runs on every tick, exactly as in the original.
     ///
     /// Nothing here applies a force, moves a Rigidbody, touches collider or kinematic state, or goes
@@ -92,6 +94,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private static Action<CharacterRagdoll> _saveAdditionalTransformPositions;
         private static ConditionalWeakTable<CharacterRagdoll, State> _states;
         private static bool _acquired;
+        /// <summary>
+        /// Set once the replacement has failed. From then on every call defers to the untouched
+        /// original, so a persistent failure degrades to vanilla behaviour instead of repeating an
+        /// exception, a catch and a diagnostics hit for every character on every physics step.
+        /// </summary>
+        private static bool _disabledAfterFailure;
 
         internal static void Initialize()
         {
@@ -163,6 +171,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _resetRotation = null;
             _saveAdditionalTransformPositions = null;
             _states = null;
+            _disabledAfterFailure = false;
             if (_acquired)
             {
                 _acquired = false;
@@ -183,6 +192,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         {
             if (!__runOriginal)
                 return false;
+
+            // A previous replacement threw; never try again for the rest of this session.
+            if (_disabledAfterFailure)
+                return true;
 
             AccessTools.FieldRef<CharacterRagdoll, Character> characterRef = _character;
             AccessTools.FieldRef<CharacterRagdoll, bool> firstFrameRef = _firstFrame;
@@ -242,7 +255,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             float accumulated = state.PendingDeltaTime;
             state.PendingDeltaTime = 0f;
-            RunReplacement(__instance, refs, parts, accumulated);
+            if (RunReplacement(__instance, refs, parts, accumulated))
+                return false;
+
+            // The replacement failed and has already restored the rig rotation it changed. Hand this
+            // tick and every later one back to the original.
+            _disabledAfterFailure = true;
             return false;
         }
 
@@ -263,19 +281,31 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// <summary>
         /// The audited method body with the two graph evaluations handed the accumulated delta time.
         ///
-        /// It never hands the tick back to the original, not even on failure. RotateCharacter captures
-        /// rotationBefore and then look-rotates the rig root (CharacterRagdoll.cs:193-197); letting the
-        /// original run after that would capture the already-rotated value as rotationBefore and leave
-        /// the rig root permanently look-rotated. The finally block restores the rotation for exactly
-        /// that reason, which is also what vanilla's own unguarded body would fail to do.
+        /// Returns false if anything threw. The caller must not hand the same tick to the original in
+        /// that case: RotateCharacter captures rotationBefore and then look-rotates the rig root
+        /// (CharacterRagdoll.cs:193-197), so a second RotateCharacter in the same tick would capture
+        /// the already-rotated value and leave the rig root permanently look-rotated.
+        ///
+        /// The rotation is therefore restored here, and restored twice over: through the game's own
+        /// ResetRotation, and - if that itself throws - by writing back the value this method captured
+        /// before rotating. That second path is what makes a failure recoverable rather than a
+        /// permanently skewed rig.
         /// </summary>
-        private static void RunReplacement(
+        private static bool RunReplacement(
             CharacterRagdoll instance,
             Character.CharacterRefs refs,
             List<Bodypart> parts,
             float deltaTime)
         {
+            Transform rigRoot = refs.rigCreator != null ? refs.rigCreator.transform : null;
+            if (rigRoot == null)
+                return false;
+
+            // Captured before RotateCharacter so the rotation can be restored even if the game's own
+            // ResetRotation is unavailable.
+            Quaternion rotationBefore = rigRoot.rotation;
             bool rotated = false;
+            bool completed = false;
             try
             {
                 _setPhysicsMats(instance);
@@ -284,7 +314,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 RigBuilder rigBuilder = refs.ikRigBuilder;
                 if (rigBuilder != null)
                 {
-                    rigBuilder.SyncLayers();
+                    // RigBuilder.Evaluate calls SyncLayers itself (RigBuilder.cs:88-97), so unlike the
+                    // audited body this does not sync twice.
                     rigBuilder.Evaluate(deltaTime);
                 }
                 PlayableGraph graph = refs.animator.playableGraph;
@@ -294,6 +325,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 for (int i = 0; i < parts.Count; i++)
                     parts[i].SaveAnimationData();
                 _saveAdditionalTransformPositions(instance);
+                completed = true;
             }
             catch (Exception)
             {
@@ -306,15 +338,28 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     try
                     {
                         _resetRotation(instance);
+                    }
+                    catch (Exception)
+                    {
+                        // Last line of defence: the rig root must not be left look-rotated.
+                        rigRoot.rotation = rotationBefore;
+                        RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.reset-failed");
+                        completed = false;
+                    }
+
+                    try
+                    {
                         for (int j = 0; j < parts.Count; j++)
                             parts[j].ResetTransform();
                     }
                     catch (Exception)
                     {
-                        RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.reset-failed");
+                        RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.reset-transform-failed");
+                        completed = false;
                     }
                 }
             }
+            return completed;
         }
 
         /// <summary>

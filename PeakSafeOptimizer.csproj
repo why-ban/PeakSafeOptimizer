@@ -3,9 +3,9 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>PeakSafeOptimizer</AssemblyName>
     <RootNamespace>PeakSafeOptimizer</RootNamespace>
-    <Version>0.1.0</Version>
-    <AssemblyVersion>0.1.0.0</AssemblyVersion>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <GameRoot>D:\SteamLibrary\steamapps\common\PEAK</GameRoot>
@@ -47,6 +47,10 @@
     </Reference>
     <Reference Include="UnityEngine.AnimationModule">
       <HintPath>$(GameManaged)\UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.ParticleSystemModule">
+      <HintPath>$(GameManaged)\UnityEngine.ParticleSystemModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Unity.Animation.Rigging">

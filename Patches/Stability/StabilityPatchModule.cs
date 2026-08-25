@@ -26,6 +26,26 @@ namespace PeakSafeOptimizer.Patches.Stability
                     nameof(ParachutePatch.Prefix)),
                 requireCurrentMvid: true,
                 reset: ParachutePatch.Reset));
+
+            context.Register(PatchId.BinocularSunGuard, () => new PatchDefinition(
+                PatchId.BinocularSunGuard,
+                BinocularSunGuardPatch.Initialize,
+                BinocularSunGuardPatch.ResolveAndValidateTarget,
+                prefix: () => new HarmonyMethod(
+                    typeof(BinocularSunGuardPatch),
+                    nameof(BinocularSunGuardPatch.Prefix)),
+                requireCurrentMvid: true,
+                reset: BinocularSunGuardPatch.Reset));
+
+            context.Register(PatchId.ItemOptimizerDeregisterGuard, () => new PatchDefinition(
+                PatchId.ItemOptimizerDeregisterGuard,
+                ItemOptimizerDeregisterGuardPatch.Initialize,
+                ItemOptimizerDeregisterGuardPatch.ResolveAndValidateTarget,
+                prefix: () => new HarmonyMethod(
+                    typeof(ItemOptimizerDeregisterGuardPatch),
+                    nameof(ItemOptimizerDeregisterGuardPatch.Prefix)),
+                requireCurrentMvid: true,
+                reset: ItemOptimizerDeregisterGuardPatch.Reset));
         }
     }
 }

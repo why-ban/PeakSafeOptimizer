@@ -1,0 +1,67 @@
+<#
+    Builds the Thunderstore package.
+
+    Layout inside the zip, per the Thunderstore package format:
+      manifest.json, icon.png, README.md at the root (required, names are case-sensitive)
+      CHANGELOG.md, LICENSE at the root (optional)
+      plugins\PeakSafeOptimizer.dll        (BepInEx plugin location)
+
+    The zip must not contain a wrapping folder, which is why the files are staged and
+    CreateFromDirectory is called with includeBaseDirectory = false.
+
+    Usage:  pwsh -File Thunderstore\pack.ps1
+#>
+
+$ErrorActionPreference = 'Stop'
+
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$thunderstore = $PSScriptRoot
+$dll = Join-Path $projectRoot 'bin\Release\netstandard2.1\PeakSafeOptimizer.dll'
+
+# Version comes from the manifest, so the zip name can never disagree with what is published.
+$manifestPath = Join-Path $thunderstore 'manifest.json'
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$version = $manifest.version_number
+if (-not $version) { throw 'manifest.json has no version_number' }
+
+Write-Host "Building Release..."
+dotnet build (Join-Path $projectRoot 'PeakSafeOptimizer.csproj') -c Release | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+if (-not (Test-Path -LiteralPath $dll)) { throw "Missing build output: $dll" }
+
+# The assembly version must match the manifest, otherwise the published page and the
+# in-game plugin list disagree about which version is installed.
+$dllVersion = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
+if ($dllVersion -ne "$version.0") {
+    throw "Version mismatch: manifest says $version, assembly says $dllVersion"
+}
+
+$stage = Join-Path ([System.IO.Path]::GetTempPath()) 'PeakSafeOptimizer_pack'
+if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+New-Item -ItemType Directory -Force -Path (Join-Path $stage 'plugins') | Out-Null
+
+Copy-Item (Join-Path $thunderstore 'manifest.json') $stage
+Copy-Item (Join-Path $thunderstore 'icon.png') $stage
+Copy-Item (Join-Path $thunderstore 'README.md') $stage
+Copy-Item (Join-Path $thunderstore 'CHANGELOG.md') $stage
+Copy-Item (Join-Path $projectRoot 'LICENSE') $stage
+Copy-Item $dll (Join-Path $stage 'plugins')
+
+$buildDir = Join-Path $thunderstore 'build'
+New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+$zip = Join-Path $buildDir "PeakSafeOptimizer-$version.zip"
+if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory(
+    $stage, $zip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+Remove-Item -LiteralPath $stage -Recurse -Force
+
+Write-Host ""
+Write-Host "Package: $zip"
+Write-Host "SHA256 : $((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash)"
+Write-Host "Size   : $((Get-Item -LiteralPath $zip).Length) bytes"
+Write-Host ""
+Write-Host "Contents:"
+$archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+try { $archive.Entries | ForEach-Object { "  $($_.FullName)" } } finally { $archive.Dispose() }

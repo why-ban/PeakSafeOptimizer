@@ -1,6 +1,6 @@
 # PeakSafeOptimizer 0.1.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 35 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 39 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
@@ -8,7 +8,7 @@
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认。41 个补丁 / 37 个开关（`RemoteRagdollLod` 与 `SnowballContactGuard` 各是一个开关管多个补丁），默认开启 35 个补丁（全部为行为等价或修复原版故障），6 个有观感代价的默认关闭。默认开启项为：
+3. 第一层用出厂默认。45 个补丁 / 41 个开关（`RemoteRagdollLod` 与 `SnowballContactGuard` 各是一个开关管多个补丁），默认开启 39 个补丁（全部为行为等价或修复原版故障），6 个有观感代价的默认关闭。默认开启项为：
 
    `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.*`。
 
@@ -20,10 +20,10 @@
 
 - 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=41, enabled=35, applied=35, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=45, enabled=39, applied=39, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
   - 没有只显示不生效的键。`registered - enabled` 应等于默认关闭的 6 项。注意 `registered` 数的是补丁而不是开关：`Experimental.RemoteRagdollLod` 一个开关对应 4 个补丁，`Fixes.SnowballContactGuard` 一个开关对应 2 个。
 - 逐项结果三类行：
-  - `applied  : <名称> [<兼容等级>] <目标方法>`（35 行，兼容等级为 Structural/Fingerprint/StrictIl）。
+  - `applied  : <名称> [<兼容等级>] <目标方法>`（39 行，兼容等级为 Structural/Fingerprint/StrictIl）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
 - 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
@@ -57,11 +57,11 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 回滚顺序：先关最近启用的单项，再逐项关闭默认开启项定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（默认开启的 35 项）
+## 2. 第一层：默认配置安全性（默认开启的 39 项）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
-### 2.1 稳定性修复（5 项）
+### 2.1 稳定性修复（7 项）
 
 | 步骤 | 补丁 | 内容 | 通过条件 |
 |---|---|---|---|
@@ -69,7 +69,11 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | A2 | `Parachute` | 手持/栏/背包取放降落伞 | 优先级正确、移除不残留、Scoutmaster 不变 |
 | A3 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
 | A4 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
-| A5 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；记录命中的是 localCharacter 还是 data/refs/stats 不完整诊断 |
+| A5 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；诊断现已细分为 `data-` / `refs-` / `stats-unavailable` 三条，记录命中哪一条 |
+| A6 | `BinocularSunGuard` | 举起望远镜（方山与其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就 |
+| A7 | `ItemOptimizerDeregisterGuard` | 正常游戏，重点在物品密集生成/销毁时 | 日志不再出现 `ItemOptimizationManager.DeregisterItem` 的 `ArgumentNullException`；物品优化行为无变化 |
+| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量）；进出范围时孢子警告全屏效果照常出现/消失；重叠区只有最近的那个发出警告 |
+| A9 | `ParticleCountCullerWrite` | 靠近与远离孢子云 | 云的粒子密度随距离变化与原版一致；日志不再出现 `ParticleCountCuller.Update` 的 NRE |
 
 ### 2.2 等价改写与规模化（15 项，13 组）
 
@@ -173,7 +177,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
 
-1. 全部默认（35 项开启）与本插件完全卸载的基线对比。
+1. 全部默认（39 项开启）与本插件完全卸载的基线对比。
 2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
 3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
@@ -238,3 +242,5 @@ BepInEx 版本 / 其它模组数量：
 - 单项失败被隔离，报告写明具体项与原因。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
 - 本轮新增的 5 项补丁与 2 条非 Harmony 车道（见 2.6）同样尚未完成游戏内验证。
+- **默认关闭的 6 项在一次静态审计后做过实质修改**（`RemoteRagdollLodPhysics` 不再回灌目标高度、`RemoteClusterAnimationThrottle` 失败后交回原版且旋转双保险复原、三处补上 `__runOriginal`、移除每部件路径上的诊断打点）。修改后**全部未经游戏内验证**，开启前请先按 D1/E1/E2 逐项走查，不要一次全开。
+- 卡死（Windows AppHangB1）排查：静态审计在这 6 项里没有发现任何无限循环、锁或跨线程等待，因此单靠代码结构无法解释主线程完全不响应。判定方法只有一个——把插件 DLL 移出 `plugins` 跑一局同样条件的对照。
