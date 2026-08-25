@@ -69,11 +69,11 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | A2 | `Parachute` | 手持/栏/背包取放降落伞 | 优先级正确、移除不残留、Scoutmaster 不变 |
 | A3 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
 | A4 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
-| A5 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；诊断现已细分为 `data-` / `refs-` / `stats-unavailable` 三条，记录命中哪一条 |
-| A6 | `BinocularSunGuard` | 举起望远镜（方山与其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就 |
+| A5 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；诊断现已细分为 `localCharacter-` / `data-` / `refs-` / `stats-` / `input-unavailable` 五条，记录命中哪一条 |
+| A6 | `BinocularSunGuard` | 举起望远镜（机场、方山、其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就。机场没有 MapHandler，是 1544 次异常最可能的来源，应命中 `mapHandler-unavailable` |
 | A7 | `ItemOptimizerDeregisterGuard` | 正常游戏，重点在物品密集生成/销毁时 | 日志不再出现 `ItemOptimizationManager.DeregisterItem` 的 `ArgumentNullException`；物品优化行为无变化 |
-| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量）；进出范围时孢子警告全屏效果照常出现/消失；重叠区只有最近的那个发出警告 |
-| A9 | `ParticleCountCullerWrite` | 靠近与远离孢子云 | 云的粒子密度随距离变化与原版一致；日志不再出现 `ParticleCountCuller.Update` 的 NRE |
+| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处；Roots 风吹过毒气时（`WindAffectedStatusEmitter`）站在范围内 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量，**任何差异都说明等价论证有漏洞**）；进出范围时孢子警告全屏效果照常出现/消失；风吹停毒气时警告也随之消失；重叠区只有最近的那个发出警告 |
+| A9 | `ParticleCountCullerWrite` | 靠近与远离孢子云；另外撞蜂巢让蜂群消散（`BeeSwarm` 是全仓第二个写 `rateOverTimeMultiplier` 的地方） | 云的粒子密度随距离变化与原版一致；蜂群消散动画正常；日志不再出现 `ParticleCountCuller.Update` 的 NRE |
 
 ### 2.2 等价改写与规模化（15 项，13 组）
 
@@ -225,7 +225,7 @@ BepInEx 版本 / 其它模组数量：
 启动状态摘要（registered/enabled/applied/skipped/failed 数量与异常项及 Reason）：
 退出时是否 verified uninstall 失败：
 热重载自测结果（含 Transpiler）：
-第一层结果（A1–A6、B1–B13、C1–C8、D1–D3、组合长时）：
+第一层结果（A1–A9、B1–B13、C1–C8、D1–D3、组合长时）：
 第二层结果（掉落物数量、爆炸卡顿、人数阶梯、流畅度）：
 第三层结果（本轮实验项、专用观察点）：
 无插件基准对比：
@@ -243,4 +243,5 @@ BepInEx 版本 / 其它模组数量：
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
 - 本轮新增的 5 项补丁与 2 条非 Harmony 车道（见 2.6）同样尚未完成游戏内验证。
 - **默认关闭的 6 项在一次静态审计后做过实质修改**（`RemoteRagdollLodPhysics` 不再回灌目标高度、`RemoteClusterAnimationThrottle` 失败后交回原版且旋转双保险复原、三处补上 `__runOriginal`、移除每部件路径上的诊断打点）。修改后**全部未经游戏内验证**，开启前请先按 D1/E1/E2 逐项走查，不要一次全开。
+- 第二轮复核（在本轮改动之上）又改了四处，同样未经游戏内验证：`StatusEmitterScan` 的警告分支不再提前 return 且距离改回真实开方（A8 的中毒速率对比是唯一验收）、`ParticleCountCullerWrite` 改为读写前先比对引擎里的现值（A9 增加蜂群消散观察）、`BinocularSunGuard` 增加 `MainCamera.instance` 与 `AchievementManager` 判空（A6 增加机场场景）、`RemoteClusterAnimationThrottle` 补回 `SyncLayers`（E1/E2 观察远端 IK 手部位置）。
 - 卡死（Windows AppHangB1）排查：静态审计在这 6 项里没有发现任何无限循环、锁或跨线程等待，因此单靠代码结构无法解释主线程完全不响应。判定方法只有一个——把插件 DLL 移出 `plugins` 跑一局同样条件的对照。

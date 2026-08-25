@@ -202,9 +202,9 @@ namespace PeakSafeOptimizer.Config
         /// Reverse lookup used by hot reload. Given the ConfigEntryBase raised by
         /// ConfigFile.SettingChanged, returns true and every PatchId it controls if it is one of this
         /// plugin's boolean patch toggles - several, when the switch is a group of patches that only
-        /// make sense together. Value-typed entries (DetailedLogging, ExplosionPointCount,
-        /// ExplosionSubPointCount, ...) are not patch toggles and return false, because they are
-        /// read at runtime and already take effect immediately.
+        /// make sense together. The remaining entries (DetailedLogging, CapBoneWeights,
+        /// CollisionCallbackReuse) are not patch toggles and return false: the first is read at
+        /// runtime, the other two drive the non-Harmony lanes that Plugin.Update polls.
         /// </summary>
         public bool TryGetPatchIds(ConfigEntryBase changedSetting, out IReadOnlyList<PatchId> ids)
         {
@@ -290,7 +290,7 @@ namespace PeakSafeOptimizer.Config
             // character has its animation graph skipped but keeps being driven towards animation
             // targets, or the reverse - neither is a state the tier was reasoned about in.
             BindGroup(config, patches, "Experimental", "RemoteRagdollLod", false,
-                "Distance tier for remote characters: beyond RemoteRagdollLodEnterDistance a remote, " +
+                "Distance tier for remote characters: past 60m a remote, " +
                 "fully controlled, non-interacting player stops evaluating its animation graph, joint " +
                 "animation, movement force and Animator parameters, and becomes a passive ragdoll " +
                 "carried by physics and the network. Gravity, drag and force flushing keep running. " +

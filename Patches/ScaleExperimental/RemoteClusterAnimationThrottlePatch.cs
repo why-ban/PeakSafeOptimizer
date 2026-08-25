@@ -231,9 +231,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             State state = states.GetOrCreateValue(__instance);
             // A manual FixedUpdate() call from the equip coroutine lands on the same tick as the
             // Unity one (CharacterItems.cs:613-628). Those are excluded by the fallback list, but if
-            // one ever reaches here it must not consume a second slice of delta time.
+            // one ever reaches here it must not consume a second slice of delta time - and the
+            // original it is handed to advances the animation by a full fixedDeltaTime of its own, so
+            // the accumulator has to be dropped rather than carried into the next tick.
             if (state.LastTick == tick)
-                return true;
+                return Yield(states, __instance);
             // A gap means the untouched original ran in between and already advanced the animation by
             // its own delta time, so anything accumulated before the gap has been accounted for.
             if (state.LastTick != tick - 1)
@@ -258,8 +260,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (RunReplacement(__instance, refs, parts, accumulated))
                 return false;
 
-            // The replacement failed and has already restored the rig rotation it changed. Hand this
-            // tick and every later one back to the original.
+            // The replacement failed. It has already restored the rig rotation it changed, so this
+            // tick stays skipped - handing it to the original as well would run RotateCharacter a
+            // second time on the same tick. Every later tick goes back to the original.
             _disabledAfterFailure = true;
             return false;
         }
@@ -314,8 +317,16 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 RigBuilder rigBuilder = refs.ikRigBuilder;
                 if (rigBuilder != null)
                 {
-                    // RigBuilder.Evaluate calls SyncLayers itself (RigBuilder.cs:88-97), so unlike the
-                    // audited body this does not sync twice.
+                    // Both calls, exactly as the audited body has them (CharacterRagdoll.cs:160-161).
+                    // RigBuilder.Evaluate does call SyncLayers itself, but only inside
+                    // `if (graph.IsValid())` (RigBuilder.cs:88-97) - and that property is only ever
+                    // assigned by the parameterless Build(). CharacterRagdoll.Start builds the rig
+                    // into the animator's graph with Build(PlayableGraph) (CharacterRagdoll.cs:53),
+                    // an overload that leaves the property alone and whose Clear() destroys whatever
+                    // RigBuilder.OnEnable had built. Evaluate is therefore a no-op here, which makes
+                    // the explicit SyncLayers the only one that runs: it is what pushes the current
+                    // IK target data into the constraint jobs before the graph evaluates.
+                    rigBuilder.SyncLayers();
                     rigBuilder.Evaluate(deltaTime);
                 }
                 PlayableGraph graph = refs.animator.playableGraph;

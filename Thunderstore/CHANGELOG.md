@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.1.0
+
+Same 45 patches and 41 switches as 1.0.0, no additions and no removals. This release is a second audit pass over the four patches and six fixes that 1.0.0 shipped, and it corrects four real defects found in them. None of it is tuning - every change below is either an equivalence repair or a widened null guard.
+
+### Equivalence repairs
+
+- `StatusEmitterScan` - the replacement returned early from the warning branch, where vanilla falls through into the tail that clears the tick timer. A poison volume you walked out of therefore kept its accumulated tick time instead of resetting it, so re-entering could deal a tick sooner than vanilla. The branch now falls through exactly as the audited method does, and the warning FX is resolved before any field is written so a deferral leaves the emitter untouched.
+- `StatusEmitterScan` - the range test is back to a real square root. Comparing squared magnitudes is not exact: the two forms disagree inside the rounding band around the threshold, and the in-range side of that band is a live damage tick. The saving that remains is computing the distance once per call instead of the two to four times vanilla computes it, plus one `TryGetValue` in place of a `ContainsKey` and three string-keyed indexer lookups.
+- `ParticleCountCullerWrite` - the redundant-write filter remembered the last value this patch wrote. That is only equivalent while nothing else writes the same emission module, and the game does write one elsewhere (the bee swarm decrements its own emission multiplier every frame while dispersing). The filter now compares against the live value on the particle system, which stays exact no matter who else writes it.
+- `RemoteClusterAnimationThrottle` - the explicit `RigBuilder.SyncLayers()` call was removed on the grounds that `Evaluate` performs it. It does, but only when the builder owns a valid graph of its own, and PEAK builds the rig into the animator's graph instead, which leaves that property unset. `Evaluate` was therefore a no-op and the IK constraint data stopped being pushed into the jobs. Both calls are restored, as in the audited method.
+
+### Wider guards
+
+- `BinocularSunGuard` - also guards `MainCamera.instance` and the achievement manager singleton, which the same method dereferences unguarded past its own guard clause.
+- `EmoteWheelGuard` - also guards `Character.input`, the one remaining unguarded link in the chain the method walks, and reports `localCharacter` separately from the rest.
+
+### Behaviour on failure
+
+- `RemoteClusterAnimationThrottle` - a replacement that fails on the same physics tick it was handed no longer yields that tick to the original, because doing so would run `RotateCharacter` twice on one tick and leave the rig root rotated. The tick stays skipped; every later tick goes to the original.
+
+None of the above is verified in game yet. See TESTING.md, steps A6, A8, A9, E1 and E2.
+
 ## 1.0.0
 
 First public release. 45 patches, 41 switches, 39 patches enabled by default.

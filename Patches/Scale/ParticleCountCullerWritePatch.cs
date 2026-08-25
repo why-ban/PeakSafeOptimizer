@@ -23,16 +23,24 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// this throws every frame, per instance.
     ///
     /// Second, the emission multiplier is written unconditionally even when the computed value has not
-    /// changed. Assigning EmissionModule.rateOverTimeMultiplier marshals into native ParticleSystem
-    /// state; for a stationary cloud and a stationary observer the value is identical frame after
-    /// frame.
+    /// changed. Assigning EmissionModule.rateOverTimeMultiplier is an InternalCall into native
+    /// ParticleSystem state and dirties the system; for a stationary cloud and a stationary observer
+    /// the value is identical frame after frame.
     ///
     /// The replacement keeps the arithmetic byte for byte - including the audited
     /// <c>(distance - minDistance) / maxDistance</c>, which is not a normalisation between the two
     /// distances and is deliberately left as-is because <c>attenuationVal</c> is a serialized field a
     /// scene may be tuned against - and changes only two things: the observer is resolved defensively,
-    /// and the native write happens only when the multiplier actually differs from the last one this
-    /// patch wrote.
+    /// and the native write is skipped when the value already on the system equals the one about to be
+    /// written.
+    ///
+    /// The comparison deliberately reads the live value rather than remembering what this patch last
+    /// wrote. A remembered value is only equivalent while nothing else writes the same module, and
+    /// this game does write emission multipliers from elsewhere - BeeSwarm's dispersal coroutine
+    /// decrements <c>beeParticles.emission.rateOverTimeMultiplier</c> every frame for a second
+    /// (BeeSwarm.cs, DisperseRoutine). On any system where both were present, a remembered value
+    /// would let that decrement stand where vanilla overwrites it every frame. Reading first trades
+    /// a native setter for a native getter and stays exact whoever else writes.
     ///
     /// Purely visual: <c>attenuationVal</c> and the emission rate are read by nothing else in the game
     /// (the only other reference to the field is its own declaration), and the spore damage lives in
@@ -40,19 +48,6 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// </summary>
     internal static class ParticleCountCullerWritePatch
     {
-        /// <summary>
-        /// Last multiplier this patch wrote per instance, so an unchanged value costs no native call.
-        /// float.NaN means "nothing written yet", and NaN != NaN makes the first write unconditional.
-        /// </summary>
-        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
-            ParticleCountCuller, Box> Written =
-            new System.Runtime.CompilerServices.ConditionalWeakTable<ParticleCountCuller, Box>();
-
-        private sealed class Box
-        {
-            internal float Value = float.NaN;
-        }
-
         private static AccessTools.FieldRef<ParticleCountCuller, ParticleSystem> _particleSystem;
         private static AccessTools.FieldRef<ParticleCountCuller, float> _startVal;
 
@@ -83,7 +78,8 @@ namespace PeakSafeOptimizer.Patches.Scale
                 throw new InvalidOperationException("ParticleSystem.emission structure mismatch");
             PropertyInfo rate = typeof(ParticleSystem.EmissionModule).GetProperty(
                 "rateOverTimeMultiplier", BindingFlags.Instance | BindingFlags.Public);
-            if (rate == null || rate.PropertyType != typeof(float) || rate.GetSetMethod() == null)
+            if (rate == null || rate.PropertyType != typeof(float) ||
+                rate.GetSetMethod() == null || rate.GetGetMethod() == null)
                 throw new InvalidOperationException("EmissionModule.rateOverTimeMultiplier mismatch");
 
             AccessTools.FieldRef<ParticleCountCuller, ParticleSystem> ps =
@@ -152,14 +148,11 @@ namespace PeakSafeOptimizer.Patches.Scale
             __instance.attenuationVal = attenuation;
 
             float multiplier = attenuation * startValRef(__instance);
-            Box box = Written.GetOrCreateValue(__instance);
-            // NaN on the first call, and NaN != anything, so the first write always happens.
-            if (box.Value == multiplier)
-                return false;
-
             ParticleSystem.EmissionModule emission = ps.emission;
-            emission.rateOverTimeMultiplier = multiplier;
-            box.Value = multiplier;
+            // A NaN multiplier fails this comparison and is therefore still written, exactly as
+            // vanilla writes it.
+            if (emission.rateOverTimeMultiplier != multiplier)
+                emission.rateOverTimeMultiplier = multiplier;
             return false;
         }
     }

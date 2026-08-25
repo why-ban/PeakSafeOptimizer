@@ -22,14 +22,16 @@ namespace PeakSafeOptimizer.Patches.Scale
     ///     contested path, resolves Center twice more for two more square roots (:133-156).
     ///
     /// This replacement keeps every branch, every field write and every call in the audited order and
-    /// changes only how the same numbers are obtained:
-    ///   * The range test compares squared magnitudes against a squared threshold. For non-negative
-    ///     operands `d &lt; r` and `d*d &lt; r*r` select the same side, so the boolean is identical.
-    ///   * Center is resolved once per call and reused. Within one frame the torso transform cannot
-    ///     move between two reads inside the same method, so this is the same value the original read
-    ///     twice.
-    ///   * The exact distance is only computed when the damage math actually needs it (:99-109), and
-    ///     it is computed as sqrt of the squared magnitude already at hand.
+    /// changes only how often the same numbers are obtained:
+    ///   * Character.localCharacter.Center is resolved once per call and reused. Within one call the
+    ///     torso transform cannot move between two reads, so this is the same value the original reads
+    ///     two to four times.
+    ///   * The distance to that centre is likewise computed once. It is still a real square root of
+    ///     the same float sum - Vector3.Distance and Mathf.Sqrt are the same intrinsic over the same
+    ///     expression - so the range boolean and the fade inputs are bit-identical. A squared compare
+    ///     would have been cheaper but not exact, and the disagreement band is a live damage tick.
+    ///   * The overlap map is looked up once with TryGetValue instead of a ContainsKey plus three
+    ///     string-keyed indexer lookups.
     ///
     /// The damage itself is untouched: amount, tickTime, the two fade curves, minAmount and the
     /// AddStatus/SubtractStatus calls are reproduced verbatim, including the `debug` field write that
@@ -200,24 +202,48 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             Vector3 position = __instance.transform.position;
             float threshold = __instance.radius + __instance.outerFade;
-            Vector3 delta = center - position;
-            float distanceSqr = delta.sqrMagnitude;
-            // Squared compare, same side as the audited `Vector3.Distance(...) < radius + outerFade`
-            // for non-negative operands. A negative threshold makes both forms false.
-            bool inRange = threshold > 0f && distanceSqr < threshold * threshold;
+            // Bit-identical to the audited InRange: Vector3.Distance is
+            // (float)Math.Sqrt(dx*dx + dy*dy + dz*dz) (Vector3.cs:809-815) and Mathf.Sqrt is the same
+            // cast of the same intrinsic (Mathf.cs:98-101) over the same float sum that sqrMagnitude
+            // computes (Vector3.cs:105-112). A squared compare would have been cheaper but is not
+            // exact: `sqrt(d) < t` and `d < t*t` disagree inside the rounding band around t, and the
+            // in-range side of that band is a real damage tick, so the cheaper form is not on offer
+            // here. The saving this patch does take is that the value is computed once instead of
+            // two to four times.
+            float distance = Mathf.Sqrt((center - position).sqrMagnitude);
+            bool inRange = distance < threshold;
 
             if (inRange && __instance.preventOverlap)
-                __instance.isOverlapPriority = TryMakePriority(__instance, map, center);
+            {
+                Dictionary<string, StatusEmitter> emitters = map();
+                string key = __instance.overlapIdentifier;
+                // A null map or a null key makes the audited ContainsKey/indexer throw. Nothing has
+                // been written yet at this point, so handing the whole method back keeps that
+                // behaviour where it belongs instead of inventing a value for isOverlapPriority.
+                if (emitters == null || key == null)
+                    return true;
+                __instance.isOverlapPriority =
+                    TryMakePriority(__instance, emitters, key, center, distance);
+            }
 
             bool inZone = inZoneRef(__instance);
             if (__instance.inZoneWarning && inZone && (!inRange || __instance.emitterDisabledByWind))
             {
-                inZoneRef(__instance) = false;
+                // Checked before any state write so that deferring leaves the emitter exactly as the
+                // original found it.
                 if (!__instance.preventOverlap || __instance.isOverlapPriority)
                 {
                     if (!TryEndWarning())
                         return true;
                 }
+                inZoneRef(__instance) = false;
+                // The audited method does not return here: this block is a plain `if`, so control
+                // falls into the second branch, whose condition is now false either way (this block
+                // is only entered when !inRange or the wind disabled the emitter), and from there
+                // into the else tail below.
+                if (__instance.emitterDisabledByWind)
+                    return false;
+                tickRef(__instance) = 0f;
                 return false;
             }
 
@@ -253,7 +279,7 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (sinceTick < tickTimeRef(__instance))
                 return false;
 
-            ApplyDamage(__instance, refs.afflictions, Mathf.Sqrt(distanceSqr), tickTimeRef(__instance));
+            ApplyDamage(__instance, refs.afflictions, distance, tickTimeRef(__instance));
             tickRef(__instance) = 0f;
             return false;
         }
@@ -270,12 +296,16 @@ namespace PeakSafeOptimizer.Patches.Scale
         {
             if (instance.inZoneWarning && inZoneRef(instance))
             {
-                inZoneRef(instance) = false;
                 if (!instance.preventOverlap || instance.isOverlapPriority)
                 {
                     if (!TryEndWarning())
                         return true;
                 }
+                inZoneRef(instance) = false;
+                // Same fall-through as the audited method: the warning block is not an early return.
+                if (instance.emitterDisabledByWind)
+                    return false;
+                tickRef(instance) = 0f;
                 return false;
             }
             if (instance.emitterDisabledByWind)
@@ -310,17 +340,20 @@ namespace PeakSafeOptimizer.Patches.Scale
         }
 
         /// <summary>
-        /// StatusEmitter.cs:133-156 with the local character's Center passed in instead of resolved
-        /// twice more. Only reached while in range, exactly as in the original.
+        /// StatusEmitter.cs:133-156 with the local character's Center and this emitter's own distance
+        /// passed in instead of resolved and recomputed two more times. Only reached while in range,
+        /// exactly as in the original. The distance comparison stays a comparison of two
+        /// Vector3.Distance results so the winner is the same one vanilla picks.
         /// </summary>
         private static bool TryMakePriority(
-            StatusEmitter instance, Func<Dictionary<string, StatusEmitter>> map, Vector3 center)
+            StatusEmitter instance,
+            Dictionary<string, StatusEmitter> emitters,
+            string key,
+            Vector3 center,
+            float distance)
         {
-            Dictionary<string, StatusEmitter> emitters = map();
-            string key = instance.overlapIdentifier;
-            if (emitters == null || key == null)
-                return instance.isOverlapPriority;
-
+            // TryGetValue in place of the audited ContainsKey followed by three separate indexer
+            // lookups on the same string key.
             if (!emitters.TryGetValue(key, out StatusEmitter current))
             {
                 emitters.Add(key, instance);
@@ -334,8 +367,7 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
-            float currentSqr = (current.transform.position - center).sqrMagnitude;
-            if ((instance.transform.position - center).sqrMagnitude < currentSqr)
+            if (distance < Vector3.Distance(current.transform.position, center))
             {
                 emitters[key] = instance;
                 return true;
