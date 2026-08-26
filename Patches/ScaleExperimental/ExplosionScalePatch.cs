@@ -24,15 +24,34 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// carries this component.
     ///
     /// Three caps are combined, and every one of them can only ever lower the orb count:
-    ///   1. the configured caps (ExplosionPointCount / ExplosionSubPointCount, shipped as 3 / 1
-    ///      against the vanilla 4 / 2, i.e. 7 orbs instead of 13);
-    ///   2. a cluster tier: when other explosions were registered within
-    ///      ExplosionClusterWindowSeconds and ExplosionClusterRadius of this one, the caps drop to
-    ///      2 / 1 (5 orbs) from two neighbours on and to 1 / 0 (2 orbs) from five neighbours on;
-    ///   3. a distance tier relative to the local viewpoint: 1 / 0 (2 orbs) from
-    ///      ExplosionNearDistance on, 0 / 0 from ExplosionFarDistance on.
+    ///   1. the base caps 3 / 1 against the vanilla 4 / 2, i.e. 7 orbs instead of 13;
+    ///   2. a cluster tier: when other explosions were registered within ClusterWindowSeconds and
+    ///      ClusterRadius of this one, the caps drop to 2 / 1 (5 orbs) from one neighbour on and to
+    ///      1 / 0 (2 orbs) from three neighbours on;
+    ///   3. a distance tier relative to the local viewpoint: 1 / 0 (2 orbs) from NearDistance on,
+    ///      0 / 0 from FarDistance on.
     /// The two tiers are merged by taking the lower cap of the two, and the merged result is finally
     /// clamped to [0, prefab value], so the patch can never raise a count and never go negative.
+    ///
+    /// The cluster tier additionally shrinks the orbs, and that - not the orb count - is what makes a
+    /// dense pile of dynamite playable. Measured on a 4GB GPU: ten sticks detonating inside one metre
+    /// still ran at about five frames per second with the count reduction alone, because the orb count
+    /// is not what the frame is spent on. Each orb is an animated transparent sphere of roughly ten
+    /// metres across (explosionRadius = 5f, ExplosionEffect.cs:14), so an observer standing in the
+    /// pile has every surviving orb covering the entire screen. The cost is orb count times screen
+    /// area, and only the second factor was still untouched.
+    ///
+    /// <c>baseScale</c> (ExplosionEffect.cs:12) is the field that sets it: the orb prefab is scaled by
+    /// <c>orb.size * baseScale</c> when it spawns (ExplosionEffect.cs:47), and that assignment is the
+    /// only read of the field anywhere in Assembly-CSharp. It feeds no damage path - the blast radius,
+    /// knockback and status come from a separate AOE component with its own <c>range</c> - so scaling
+    /// it changes how big the fireball looks and nothing else. It is only ever lowered, and only on
+    /// the cluster tiers, so a single explosion keeps its authored size exactly.
+    ///
+    /// Why shrinking a clustered explosion reads as almost unchanged: the tier requires the
+    /// neighbours to be within ClusterRadius, i.e. the fireballs are largely coincident, and what the
+    /// player sees is their union. Ten overlapping spheres at 60% radius still produce a fireball
+    /// wider than any single explosion, while costing roughly a third of the fill per orb.
     ///
     /// The 0 / 0 tier is still a visible explosion: GetPoints always allocates
     /// explosionPoints[0] (ExplosionEffect.cs:58-60), so the centre orb - the flash - is unaffected.
@@ -56,8 +75,22 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private const string ExplosionOrbArrayTypeName = "ExplosionOrb[]";
 
         private const int RingCapacity = 16;
-        private const int ClusterLightNeighbours = 2;
-        private const int ClusterHeavyNeighbours = 5;
+        /// <summary>
+        /// Neighbour counts that select the cluster tiers. The current explosion is recorded after it
+        /// is counted, so the first one in a pile always sees zero and keeps full base behaviour;
+        /// starting the light tier at one neighbour is what makes the second explosion onwards - i.e.
+        /// every explosion that is actually piling fill on top of another - take a reduction.
+        /// </summary>
+        private const int ClusterLightNeighbours = 1;
+        private const int ClusterHeavyNeighbours = 3;
+
+        /// <summary>
+        /// Orb size multipliers per cluster tier. Screen area goes with the square, so 0.85 costs
+        /// about 72% of the fill per orb and 0.6 about 36%. Applied on top of the count reduction, so
+        /// the two multiply.
+        /// </summary>
+        private const float ClusterLightScale = 0.85f;
+        private const float ClusterHeavyScale = 0.6f;
 
         /// <summary>
         /// Base caps applied to every explosion. Vanilla is 4 / 2, i.e.
@@ -67,7 +100,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private const int SubPointCap = 1;
 
         /// <summary>Two explosions count as clustered within this time and distance of each other.</summary>
-        private const float ClusterWindowSeconds = 1.2f;
+        /// <remarks>
+        /// The window has to outlast the orbs of the preceding explosion rather than just its
+        /// detonation instant, because it is those orbs that the new ones are drawing over. A single
+        /// explosion spawns its outermost orbs up to <c>maxDelay * 2</c> = one second after it starts
+        /// (ExplosionEffect.cs:68-76) and they then play out their animation, so 2.5s is the span over
+        /// which two explosions genuinely share the screen.
+        /// </remarks>
+        private const float ClusterWindowSeconds = 2.5f;
         private const float ClusterRadius = 3.5f;
 
         /// <summary>
@@ -108,6 +148,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(ExplosionEffect), "Start", typeof(void), Type.EmptyTypes, requirePublic: false);
             ScaleValidation.RequireInheritedInstanceProperty(
                 typeof(ExplosionEffect), "transform", typeof(Transform));
+
+            // The orb size multiplier. Public and serialized like the two counts, read exactly once -
+            // at the localScale assignment in the IExplode local function (ExplosionEffect.cs:47) -
+            // and by nothing else in the assembly, which is what makes lowering it purely visual.
+            FieldInfo baseScaleField = ScaleValidation.RequireInstanceField(
+                typeof(ExplosionEffect), "baseScale", typeof(float));
+            if (!baseScaleField.IsPublic)
+                throw new InvalidOperationException(
+                    "ExplosionEffect.baseScale is no longer a public instance field");
+            // Proof that the size the orbs are scaled by is still the authored per-orb size times
+            // this field, i.e. that lowering it lowers every orb of this explosion uniformly.
+            ScaleValidation.RequireInstanceField(
+                typeof(ExplosionEffect), "explosionRadius", typeof(float));
+            ScaleValidation.RequireInstanceField(
+                typeof(ExplosionEffect), "childSizeFactor", typeof(float));
 
             // Distance tier: primary viewpoint, then the local character fallback.
             ScaleValidation.RequireStaticField(typeof(MainCamera), "instance", typeof(MainCamera));
@@ -164,6 +219,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             int pointCap = PointCap;
             int subPointCap = SubPointCap;
+            float scaleFactor = 1f;
 
             Vector3 position = __instance.transform.position;
             float now = Time.time;
@@ -174,11 +230,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             {
                 pointCap = Math.Min(pointCap, 1);
                 subPointCap = Math.Min(subPointCap, 0);
+                scaleFactor = ClusterHeavyScale;
             }
             else if (neighbours >= ClusterLightNeighbours)
             {
                 pointCap = Math.Min(pointCap, 2);
                 subPointCap = Math.Min(subPointCap, 1);
+                scaleFactor = ClusterLightScale;
             }
 
             if (TryGetViewpoint(out Vector3 viewpoint))
@@ -206,6 +264,16 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 // This is the only branch that changes visuals, and it only ever lowers the count.
                 // Not accounted as a fault, so no diagnostics here: dense explosions would otherwise
                 // hit a diagnostics counter on every single explosion.
+            }
+
+            if (scaleFactor < 1f)
+            {
+                float currentScale = __instance.baseScale;
+                float reduced = currentScale * scaleFactor;
+                // Only ever lower it. A zero or negative authored value, or a NaN, fails this
+                // comparison and is passed through to the original untouched.
+                if (reduced < currentScale)
+                    __instance.baseScale = reduced;
             }
 
             return true;

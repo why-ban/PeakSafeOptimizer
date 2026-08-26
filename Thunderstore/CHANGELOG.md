@@ -2,7 +2,7 @@
 
 ## 1.1.0
 
-Same 45 patches and 41 switches as 1.0.0, no additions and no removals. This release is a second audit pass over the four patches and six fixes that 1.0.0 shipped, and it corrects four real defects found in them. None of it is tuning - every change below is either an equivalence repair or a widened null guard.
+Same 45 patches and 41 switches as 1.0.0, no additions and no removals. This release is a second audit pass that corrects four equivalence defects, widens two guards, and fixes `ExplosionScale`, whose cluster reduction turned out not to trigger in the case it was written for.
 
 ### Equivalence repairs
 
@@ -20,7 +20,15 @@ Same 45 patches and 41 switches as 1.0.0, no additions and no removals. This rel
 
 - `RemoteClusterAnimationThrottle` - a replacement that fails on the same physics tick it was handed no longer yields that tick to the original, because doing so would run `RotateCharacter` twice on one tick and leave the rig root rotated. The tick stays skipped; every later tick goes to the original.
 
-None of the above is verified in game yet. See TESTING.md, steps A6, A8, A9, E1 and E2.
+### `ExplosionScale` now attacks the right cost
+
+Reported: ten sticks of dynamite detonating inside one metre still ran at about five frames per second. Confirmed as a design error rather than a failure to apply.
+
+- The cluster tier could not trigger in that scenario. It needed two prior explosions within 1.2s, but a single explosion keeps spawning orbs for a full second after it starts, and its neighbours are what the new orbs draw over - so the window was shorter than the overlap it was meant to detect. The window is now 2.5s and the light tier starts at one neighbour instead of two, so every explosion after the first in a pile takes a reduction.
+- Reducing the orb count was never going to fix it on its own. An orb is an animated transparent sphere roughly ten metres across, so an observer inside the pile has every surviving orb covering the whole screen; the frame cost is orb count times screen area and only the count was being reduced. The cluster tiers now also shrink the orbs, to 85% and 60% of their authored size, which is where most of the saving comes from - screen area goes with the square of the radius.
+- A lone explosion is unaffected: it sees no neighbours, so its size is exactly what the prefab authored. The size field is only ever lowered, feeds no damage path, and is read by exactly one line in the whole assembly.
+
+None of the above is verified in game yet. See TESTING.md, steps A6, A8, A9, B13, E1 and E2.
 
 ## 1.0.0
 
