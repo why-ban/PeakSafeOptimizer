@@ -27,9 +27,11 @@ namespace PeakSafeOptimizer.Config
         // nodes, which otherwise throws NullReferenceException in ConfigureIK every physics frame
         // during the equip transition (135 occurrences confirmed in-game).
         IKItemGuard,
-        // Stability lane: skips GUIManager.UpdateEmoteWheel when Character.localCharacter is null or
-        // destroyed (spectating/respawn/quit), removing a per-frame NullReferenceException flood
-        // (2315 occurrences confirmed in-game).
+        // Stability lane: skips GUIManager.UpdateEmoteWheel only on the frames where vanilla would
+        // dereference something unavailable. The chain it walks is short-circuited in two places -
+        // canEmote returns early when data.dead, and `canEmote && input.emoteIsPressed` never touches
+        // input when canEmote is false - so the guard reproduces both, because skipping a frame vanilla
+        // survives would also suppress the branch that closes the wheel and clears usingEmoteWheel.
         EmoteWheelGuard,
         Campfire,
         // Scale lane (Lane E1): scan/redundant-write reduction for multiplayer player counts
@@ -61,11 +63,16 @@ namespace PeakSafeOptimizer.Config
         ItemScaleRedundantWrite,
         RemoteItemInterpolationThreshold,
         EyeLookComponentCache,
-        // ScaleExperimental lane: explosion orb count reduction. Vanilla is 4 / 2, i.e.
-        // 1 + 4 + 2 * 4 = 13 orbs per explosion; the shipped caps are 3 / 1, i.e.
-        // 1 + 3 + 1 * 3 = 7 orbs. On top of the static caps the patch applies a cluster tier
+        // ScaleExperimental lane: explosion orb count reduction. The three explosion prefabs that
+        // carry ExplosionEffect are the dynamite family, and their authored counts are 3/2 (the main
+        // one, i.e. 1 + 3 + 2 * 3 = 10 orbs) and 3/0 (the small and fae variants, 4 orbs) - the 4/2
+        // field defaults in the class are overridden by the serialized values. The shipped caps are
+        // 2/1, i.e. 5 orbs and 3 orbs. On top of the static caps the patch applies a cluster tier
         // (several explosions close together in time and space) and a distance tier (explosions far
-        // from the local viewpoint), both of which can only lower the caps further.
+        // from the local viewpoint), both of which can only lower the caps further, and the cluster
+        // tier also shrinks the orbs. Fewer orbs also means fewer screen-shake instances, because
+        // each orb carries two auto AddScreenshake children - that is the second visual cost and it
+        // is why this entry is the one visual reduction that is still on by default.
         ExplosionScale,
         // Scale lane, class-A strict-equivalence optimizations. All default-enabled. Each is an
         // independent redundant-work elimination with an exact structure check in Initialize.
@@ -146,14 +153,15 @@ namespace PeakSafeOptimizer.Config
         // DeregisterItem(null), and Dictionary.Remove(null) throws. Confirmed in-game: 67 times.
         ItemOptimizerDeregisterGuard,
         // Scale lane: equivalent replacement of StatusEmitter.Update(), which every spore-gas volume
-        // in the level runs every frame with no distance gate of its own. Squares the range test,
-        // resolves the local character's Center once instead of two to four times, and only touches
-        // the string-keyed overlap dictionary while actually in range.
-        StatusEmitterScan,
-        // Scale lane: skips the per-frame emission write of ParticleCountCuller when the attenuation
-        // it computed is unchanged, and guards the missing Character.observedCharacter null check that
-        // makes vanilla throw every frame before a character exists.
-        ParticleCountCullerWrite
+        // in the level runs every frame with no distance gate of its own. Confirmed against the
+        // shipped assets: 1571 StatusEmitter plus 108 WindAffectedStatusEmitter instances exist, and
+        // nothing distance-gates them - GenericOptimizer, the game's own script disabler, is only on
+        // arrow shooters and venus fly traps. Resolves the local character's Center and its distance
+        // once instead of the two to four times vanilla does, and replaces the string-keyed overlap
+        // probe with a single TryGetValue. The range test stays a real square root: a squared compare
+        // is not exact in the rounding band around the threshold and the in-range side of that band is
+        // a live damage tick.
+        StatusEmitterScan
     }
 
     public sealed class OptimizerConfig
@@ -220,6 +228,33 @@ namespace PeakSafeOptimizer.Config
             return false;
         }
 
+        /// <summary>
+        /// Every PatchId controlled by the same switch as <paramref name="id"/>, including itself, in
+        /// declaration order. A single-patch switch returns a one-element list. Used by the installer
+        /// to keep a group all-or-nothing: a group whose members are only correct together must never
+        /// end up half installed, so if one member cannot install the ones that did are withdrawn.
+        /// </summary>
+        public IReadOnlyList<PatchId> GetGroupMembers(PatchId id)
+        {
+            if (_patches.TryGetValue(id, out ConfigEntry<bool> entry) &&
+                _byEntry.TryGetValue(entry, out List<PatchId> members))
+            {
+                return members;
+            }
+            return new[] { id };
+        }
+
+        /// <summary>
+        /// True when <paramref name="id"/> is the first member of its switch. Hot reload uses this to
+        /// act once per switch instead of once per patch, because a group is installed and uninstalled
+        /// as a unit.
+        /// </summary>
+        public bool IsGroupRepresentative(PatchId id)
+        {
+            IReadOnlyList<PatchId> members = GetGroupMembers(id);
+            return members.Count == 0 || members[0] == id;
+        }
+
         public static OptimizerConfig Bind(ConfigFile config)
         {
             var patches = new Dictionary<PatchId, ConfigEntry<bool>>
@@ -233,10 +268,12 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.HeatEmissionScan] = BindPatch(config, PatchId.HeatEmissionScan, true),
                 [PatchId.RagdollPhysicsMats] = BindPatch(config, PatchId.RagdollPhysicsMats, true),
                 [PatchId.ItemCollisionMode] = BindPatch(config, PatchId.ItemCollisionMode, true),
-                // Squared-distance equivalent for GenericOptimizer.AnyCharacterWithinRange. It is a
-                // strict equivalence, but with the audited default rangeToDisableScripts =
-                // float.PositiveInfinity it only adds a thin indirection on default scene data.
-                // Still enabled by default per user request.
+                // Squared-distance equivalent for GenericOptimizer.AnyCharacterWithinRange. Confirmed
+                // against the shipped assets: all 2133 GenericOptimizer instances override
+                // rangeToDisableScripts with a finite value (82m on arrow shooters, 60m on venus fly
+                // traps) rather than leaving the float.PositiveInfinity field default, so this runs a
+                // real distance comparison per character per frame per instance and the squared form
+                // is a genuine saving rather than a thin indirection.
                 [PatchId.GenericOptimizerRange] = BindPatch(config, PatchId.GenericOptimizerRange, true),
                 [PatchId.CampfireProtectionMerge] = BindPatch(config, PatchId.CampfireProtectionMerge, true),
                 // Host-only zombie scan optimizations (squared-distance equivalents).
@@ -276,14 +313,14 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.ItemOptimizerDeregisterGuard] =
                     BindPatch(config, PatchId.ItemOptimizerDeregisterGuard, true),
                 [PatchId.StatusEmitterScan] =
-                    BindPatch(config, PatchId.StatusEmitterScan, true),
-                [PatchId.ParticleCountCullerWrite] =
-                    BindPatch(config, PatchId.ParticleCountCullerWrite, true)
+                    BindPatch(config, PatchId.StatusEmitterScan, true)
             };
 
             // Groups: sets of patches that are only correct together, so they get one switch each
             // rather than one per patch. A per-patch switch would invite a half-enabled combination
-            // that looks supported and is not.
+            // that looks supported and is not. The installer enforces this too: a group is installed
+            // all-or-nothing, and a member that cannot install withdraws the ones that did
+            // (PatchInstaller.InstallGroup).
             //
             // RemoteRagdollLod: four patches sharing one distance-tier decision
             // (Patches\ScaleExperimental\RemoteRagdollLod). Enabling only some of them means a remote
@@ -294,8 +331,10 @@ namespace PeakSafeOptimizer.Config
                 "fully controlled, non-interacting player stops evaluating its animation graph, joint " +
                 "animation, movement force and Animator parameters, and becomes a passive ragdoll " +
                 "carried by physics and the network. Gravity, drag and force flushing keep running. " +
+                "Distance is measured from whoever you are currently watching, not from your own " +
+                "corpse, so spectating does not freeze the lobby around you. " +
                 "Off by default: a distant character visibly freezes its pose. One switch for all four " +
-                "patches, which are only coherent together.",
+                "patches, which are only coherent together and are installed as a unit.",
                 PatchId.RemoteRagdollLodPhysics,
                 PatchId.RemoteRagdollLodAnimate,
                 PatchId.RemoteRagdollLodMovementForce,
@@ -315,15 +354,19 @@ namespace PeakSafeOptimizer.Config
                 "Set Physics.reuseCollisionCallbacks so the engine stops allocating a Collision " +
                 "object plus a ContactPoint[] for every reported collision. Only applied when " +
                 "both Snowball guards installed successfully, because Snowball is the only place in " +
-                "the game that keeps a Collision reference across frames. Off by default because it " +
-                "is a process-wide engine flag: the game side is audited and guarded, but any other " +
-                "mod that keeps a Collision past its callback would start reading a reused instance.");
+                "the game that keeps a Collision reference across frames. Turned off again before any " +
+                "patch toggle and on game exit, and only ever restored to the value it found while " +
+                "that value is still the one this lane wrote. Off by default because it " +
+                "is a process-wide engine flag: the game side is audited and guarded, but the game " +
+                "also hands the live Collision to mods through Bodypart.collisionStayAction and " +
+                "CollisionModifier.onCollide, so a mod that keeps one past its callback would start " +
+                "reading a reused instance.");
             GraphicsCapBoneWeights = config.Bind("Graphics", "CapBoneWeights", false,
                 "Limit QualitySettings.skinWeights to two bones per vertex. Bones per vertex is a " +
                 "per-vertex cost of every skinned character, so it scales with how many players are " +
                 "on screen, and the game exposes no setting for it. Only ever lowered, never raised, " +
-                "and the launch value is restored when this is turned off. Off by default: joint " +
-                "deformation (shoulders, hips) becomes a little coarser.");
+                "and the value found when it was switched on is restored when it is switched off. " +
+                "Off by default: joint deformation (shoulders, hips) becomes a little coarser.");
             ConfigEntry<bool> detailed = config.Bind("Diagnostics", "DetailedLogging", true,
                 "Emit per-reason aggregate repair diagnostics no more frequently than every 30 seconds.");
             return new OptimizerConfig(patches, detailed);

@@ -89,6 +89,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Vector3), "Angle", typeof(float), new[] { typeof(Vector3), typeof(Vector3) }, true);
             ScaleValidation.RequireStaticMethod(
                 typeof(Vector3), "Distance", typeof(float), new[] { typeof(Vector3), typeof(Vector3) }, true);
+            // The shared physics-step index this patch throttles on.
+            ScaleValidation.RequireStaticProperty(typeof(Time), "fixedTimeAsDouble", typeof(double));
 
             Type rigidbodyType = rigField.FieldType;
             MethodInfo addForce = rigidbodyType.GetMethod(
@@ -177,7 +179,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             Vector3 position = self.position;
             TargetState state = states.GetOrCreateValue(__instance);
-            int tick = Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
+            // Same physics-step index the other physics-phase lanes use, derived from
+            // Time.fixedTimeAsDouble rather than the float Time.fixedTime: that one accumulates from
+            // process start and in a long session no longer has the mantissa to separate two adjacent
+            // steps, which would make the floor repeat or skip an index. Here a repeat costs one
+            // postponed rescan and a skip one early rescan, so the effect is mild either way, but the
+            // derivation is shared so no two lanes disagree about which step they are on.
+            int tick = RemoteRagdollLod.PhysicsTick();
             // Rescan on: first sight, interval elapsed, a fixedTime reset (scene reload), or a cached
             // target that is gone / destroyed / dead. Everything else reuses the cached target and
             // still recomputes the direction from its current Center, so steering stays continuous.

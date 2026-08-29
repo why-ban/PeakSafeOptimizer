@@ -1,16 +1,18 @@
-# PeakSafeOptimizer 0.1.0 集中测试指引
+# PeakSafeOptimizer 1.2.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 39 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 38 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
 ## 0. 测试前准备
 
 1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
-2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载，但关键开关（尤其 `BreakableBridge` 这个 Transpiler）仍建议以「改 cfg 后完全退出重启」为最稳妥路径。
-3. 第一层用出厂默认。45 个补丁 / 41 个开关（`RemoteRagdollLod` 与 `SnowballContactGuard` 各是一个开关管多个补丁），默认开启 39 个补丁（全部为行为等价或修复原版故障），6 个有观感代价的默认关闭。默认开启项为：
+2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载（插件已无任何 Transpiler），但如果只想排除「热重载路径本身有问题」这个变量，仍可以用「改 cfg 后完全退出重启」这条路径复测。
+3. 第一层用出厂默认。44 个补丁 / 40 个开关（`RemoteRagdollLod` 管 4 个补丁、`SnowballContactGuard` 管 2 个，各是一个开关），默认开启 38 个补丁，6 个有观感代价的默认关闭。默认开启项为：
 
-   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`BreakableBridge`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`RemoteRagdollLodPhysics`、`RemoteRagdollLodAnimate`、`RemoteRagdollLodMovementForce`、`RemoteRagdollLodAnimator`、`JointProjection`、`DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`RemoteClusterAnimationThrottle`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`，另有非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.*`。
+   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`、`BinocularSunGuard`、`ItemOptimizerDeregisterGuard`、`StatusEmitterScan`（共 38 项）。
+
+   **默认关闭的 6 个补丁 / 4 个开关**：`Experimental.RemoteRagdollLod`（一个开关 = `RemoteRagdollLodPhysics`/`Animate`/`MovementForce`/`Animator` 四个补丁）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`；另有两条非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.CapBoneWeights`（不计入 44 个补丁）。
 
 4. 准备一次不装插件的同场景基准（同人数/地点/操作序列）才能判断收益。
 
@@ -18,14 +20,15 @@
 
 启动日志逐行均带 `PeakSafeOptimizer |` 前缀，用该关键字过滤可整块取出报告。
 
-- 版本 `0.1.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
+- 版本 `1.2.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=45, enabled=39, applied=39, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=44, enabled=38, applied=38, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
   - 没有只显示不生效的键。`registered - enabled` 应等于默认关闭的 6 项。注意 `registered` 数的是补丁而不是开关：`Experimental.RemoteRagdollLod` 一个开关对应 4 个补丁，`Fixes.SnowballContactGuard` 一个开关对应 2 个。
 - 逐项结果三类行：
-  - `applied  : <名称> [<兼容等级>] <目标方法>`（39 行，兼容等级为 Structural/Fingerprint/StrictIl）。
+  - `applied  : <名称> [<兼容等级>] <目标方法>`（38 行，兼容等级为 Structural/Fingerprint/StrictIl）。
   - `failed   : ...`（预期 0 行）。
 - 任何 `Failed*`（`FailedInitialize`/`FailedPatch` 等）都要记录对应项与 `Reason`；`SkippedStructureMismatch`/`SkippedIlMismatch` 表明该项结构校验拒绝当前构建，应记录具体项。
+- `SkippedGroupIncomplete` 表明某个分组开关里有成员装不上，整组被撤回。`Reason` 会指名是哪个成员、为什么。这不是失败，但必须记录——它意味着该开关在当前构建上整体不可用（而不是半装）。
 - 未认证构建上的行为替换补丁若出现 `SkippedUncertifiedBuild` 属于预期安全拒绝，不计为失败。
 - 退出时无 `verified uninstall failed`，且没有遗留 Harmony 方法；插件使用逐补丁卸载，不调用全局 `UnpatchSelf`。
 
@@ -49,6 +52,8 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 1. 进游戏后，在 ConfigurationManager 里把一个默认开启的 Prefix 补丁（例如 `Fixes.ItemCollisionMode`）关掉再打开。
 2. 观察日志：应出现 `HotReload: ItemCollisionMode disabled→uninstalled` 与 `HotReload: ItemCollisionMode enabled→installed`。
 3. 把另一个默认开启的 `Experimental.*` 补丁（例如 `Experimental.ExplosionScale`）关掉再打开，观察同格式两行。
+4. **分组开关自测**：把 `Fixes.SnowballContactGuard` 关掉再打开。预期看到**两行**（`SnowballContactSnapshot` 与 `SnowballContactConsume` 各一行），因为一个开关管两个补丁且整组一起装卸。把 `Experimental.RemoteRagdollLod` 关掉再打开，预期看到**四行**。任何一次只出现一行都说明分组语义坏了。
+5. **引擎标志时序自测**（需先手动开启 `Experimental.CollisionCallbackReuse`）：在它已生效的状态下把 `Fixes.SnowballContactGuard` 关掉。预期日志顺序是「先 `reuseCollisionCallbacks restored to False (patch set changing)`，再两行 `disabled→uninstalled`」——标志必须在守卫卸载**之前**落下。再把守卫打开，预期立刻（同一帧，不是下一帧）重新出现 `reuseCollisionCallbacks = true`。顺序颠倒就说明这个窗口没关住。
 6. `Diagnostics.DetailedLogging` 改值后即时生效，无需重载或重启。配置里已没有任何数值项——所有阈值都是代码常量。
 
 ## 1. 立即停止的恶性判据
@@ -57,7 +62,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 回滚顺序：先关最近启用的单项，再逐项关闭默认开启项定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（默认开启的 39 项）
+## 2. 第一层：默认配置安全性（默认开启的 38 项）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
@@ -69,11 +74,10 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | A2 | `Parachute` | 手持/栏/背包取放降落伞 | 优先级正确、移除不残留、Scoutmaster 不变 |
 | A3 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
 | A4 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
-| A5 | `EmoteWheelGuard` | 表情轮/观战/重生/退出 | 表情轮正常；无 `canEmote` NRE；诊断现已细分为 `localCharacter-` / `data-` / `refs-` / `stats-` / `input-unavailable` 五条，记录命中哪一条 |
-| A6 | `BinocularSunGuard` | 举起望远镜（机场、方山、其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就。机场没有 MapHandler，是 1544 次异常最可能的来源，应命中 `mapHandler-unavailable` |
+| A5 | `EmoteWheelGuard` | **本轮重点回归项**：正常开合表情轮；在**已死亡/观战**状态下按住再松开表情键；结算画面（`stats.won`）下同样操作；重生、退出 | 表情轮开合正常，松手后必须**关闭**且光标消失、暂停菜单能打开（1.1.0 在「角色已死 + refs/stats 或 input 缺失」时会把这条关闭分支一起跳过，导致表情轮与光标卡死）。无 `canEmote` NRE。诊断五条 `localCharacter-` / `data-` / `refs-` / `stats-` / `input-unavailable`，记录命中哪一条——新逻辑下 `refs-`/`stats-` 只在角色**存活**时可达，`input-` 只在 `canEmote` 为真时可达 |
+| A6 | `BinocularSunGuard` | 举起望远镜（机场、方山白天、方山夜间、其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就。机场没有 MapHandler，是 1544 次异常最可能的来源，应命中 `mapHandler-unavailable`。**非方山或夜间举镜时，`mainCamera-` / `center-` / `achievementManager-` 三条必须一次都不命中**（原版在那些条件下会提前 return，本轮已把这三项检查移到复现 guard clause 之后，就是为了消除这种假阳性） |
 | A7 | `ItemOptimizerDeregisterGuard` | 正常游戏，重点在物品密集生成/销毁时 | 日志不再出现 `ItemOptimizationManager.DeregisterItem` 的 `ArgumentNullException`；物品优化行为无变化 |
-| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处；Roots 风吹过毒气时（`WindAffectedStatusEmitter`）站在范围内 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量，**任何差异都说明等价论证有漏洞**）；进出范围时孢子警告全屏效果照常出现/消失；风吹停毒气时警告也随之消失；重叠区只有最近的那个发出警告 |
-| A9 | `ParticleCountCullerWrite` | 靠近与远离孢子云；另外撞蜂巢让蜂群消散（`BeeSwarm` 是全仓第二个写 `rateOverTimeMultiplier` 的地方） | 云的粒子密度随距离变化与原版一致；蜂群消散动画正常；日志不再出现 `ParticleCountCuller.Update` 的 NRE |
+| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处；Roots 风吹过毒气时（`WindAffectedStatusEmitter`）站在范围内；另外在刚重生/刚进图（ragdoll 尚未注册）时站在毒气里 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量，**任何差异都说明等价论证有漏洞**）；进出范围时孢子警告全屏效果照常出现/消失；风吹停毒气时警告也随之消失；重叠区只有最近的那个发出警告；刚重生那一瞬不应出现 `Character.Center` 的 `KeyNotFoundException`（本轮把它从「交回原版再抛一次」改成了真正消除，诊断 `center-unavailable` 可以命中但异常不应出现） |
 
 ### 2.2 等价改写与规模化（15 项，13 组）
 
@@ -90,7 +94,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | B10 | `ItemScaleRedundantWrite` | 拾取丢弃/背包/雪球 | 物品缩放不卡住、背包 0.5 倍正确、各客户端一致 |
 | B11 | `RemoteItemInterpolationThreshold` | 大量掉落物静置/撞击/远处 | 远端物品不卡住/不抖动、被撞后立刻跟上 |
 | B12 | `EyeLookComponentCache` | 多人围站/说话/死亡/重连 | 眼球朝向、说话者抢占、离开后不盯空位 |
-| B13 | `ExplosionScale` | 单发引爆一次；随后 10 根炸药堆在 1 米内同时引爆并贴脸观察 | 单发：由 13 球降为 7 球，火球大小与原版完全一致（`baseScale` 不被改写）。堆爆：第 2 发起球体缩到 85%、第 4 发起缩到 60% 且只剩 2 球，火球整体轮廓仍明显大于单发，帧率相对本项关闭时有可感知改善。任一条不满足记录下来 |
+| B13 | `ExplosionScale` | 单发引爆一次；随后 10 根炸药堆在 1 米内同时引爆并贴脸观察；另外分别用火箭背包与 GhostBall 各爆一次 | 单发：主炸药由 **10 球降为 5 球**，火球大小与原版完全一致（`baseScale` 不被改写）。堆爆：第 2 发起球体缩到 85%、第 4 发起缩到 60% 且只剩 2 球，火球整体轮廓仍明显大于单发，帧率相对本项关闭时有可感知改善。**屏幕震动会同比变弱**（每球两个叠加式 shake，20→10→4 次），确认这个代价可接受。火箭背包与 GhostBall 的爆炸**应完全不受影响**（它们的预制体不含 `ExplosionEffect`）——若观察到它们也变了，说明覆盖面判断错了。任一条不满足记录下来 |
 
 ### 2.3 等价规模化重点观测（8 项）
 
@@ -109,7 +113,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 | 步骤 | 补丁 | 场景 | 通过条件 |
 |---|---|---|---|
-| D1 | `Experimental.RemoteRagdollLod`（一个开关，四个补丁） | 一名远端玩家从 40 米走到 70 米再返回并切换装备 | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态 |
+| D1 | `Experimental.RemoteRagdollLod`（一个开关，四个补丁） | 一名远端玩家从 40 米走到 70 米再返回并切换装备；远端玩家在 70 米外反复蹲下站起与冲刺；**本地角色死亡进入观战后，观察镜头附近的远端玩家** | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态。远端蹲/冲刺切换时该角色应短暂恢复完整行为（本轮新增：两个目标高度只由被跳过的那段写，冻结会让站立力与地面射线用错值）。**观战时镜头前的角色绝不应姿态凝固**（本轮把距离基准从本地角色改成了观察对象） |
 | D3 | `DetailBodypartThrottle` | 8 人近距聚集、移动、抓取、攀爬、倒地 | 本地角色不受影响；远端手指/jiggle/嘴颌轻微降帧可接受；关节不漂浮、不爆力、不出现 NaN |
 | D4 | `PocketBehaviorGuard` | 新玩家加入 / 重连 | 注册窗口不再出现 `UpdatePocketBehaviors` 空引用刷屏；口袋物品（背包内被动效果）行为正常 |
 | D5 | `BodypartDragIdentity` | 倒地堆叠、被风滚草撞倒、拖拽 | 阻尼观感与原版一致；手指自然下垂正常；无速度异常累积 |
@@ -153,7 +157,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 ### 3.5 爆炸卡顿（本次痛点）
 
-全员同时投掷多枚炸药，记录主观卡顿与帧率（外部工具或主观记录，务必与无插件基准对比）。默认基础上限为 3 / 1：近距单发 7 球；1.2 秒、3.5 米内累计到 2 / 5 个邻近爆炸后自动降到 5 / 2 球；50–120 米为 2 球，120 米外仅中心球。确认视觉可接受，并重点排查生成炸药时卡死；当前实现绝不调用 `Shader.WarmupAllShaders()`。
+全员同时投掷多枚炸药，记录主观卡顿与帧率（外部工具或主观记录，务必与无插件基准对比）。当前基础上限为 **2 / 1**：近距单发主炸药 **5 球**（原版 10）、Small/Fae 3 球（原版 4）；**2.5 秒**、3.5 米内累计到 **1** 个邻近爆炸即进轻档（只缩到 85%，球数不变）、累计到 **3** 个进重档（2 球 + 60% 尺寸）；50–120 米为 2 球，120 米外仅中心球。确认视觉与震动削弱可接受，并重点排查生成炸药时卡死；当前实现绍不调用 `Shader.WarmupAllShaders()`。注意：孔菌爆炸、间歇泉/闪光植物的 `Explosion`、气球、火箭、GhostBall 都不含 `ExplosionEffect`，本补丁对它们无效——如果卡顿在那些场景，不属于本项的验收范围。
 
 ### 3.6 八人近距聚集（核心对比）
 
@@ -165,7 +169,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 2. `Experimental.DetailBodypartThrottle`
 3. `Fixes.BodypartMovementForceIdentity`
 4. `Experimental.CollisionCallbackReuse`（GC 维度，看帧时间毛刺而不是平均帧率）
-5. `Graphics.GraphicsBudgetEnabled`（GPU 维度，MSAA 与每顶点骨骼数）
+5. `Graphics.CapBoneWeights`（GPU 维度，每顶点骨骼数；默认关闭，需先手动开启才能测“关掉它”）
 
 如果只有第 5 项关掉后帧率明显下降、前四项都无差别，那说明这个场景是 GPU bound，继续调 CPU 侧没有意义。反之则相反。这一步的判定力比任何单项收益都高。
 
@@ -177,11 +181,11 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
 
-1. 全部默认（39 项开启）与本插件完全卸载的基线对比。
+1. 全部默认（38 项开启）与本插件完全卸载的基线对比。
 2. 仅关闭 `Experimental.TumbleWeedTargetScan`，在风滚草过境时对比。
 3. 仅关闭 `Fixes.LightVolumeSampleCache`，在多人同时说话时对比。
 4. 仅关闭 `Fixes.BodypartDragIdentity`，在全员倒地堆叠时对比。
-5. 仅关闭 `Graphics.GraphicsBudgetEnabled`（MSAA 与每顶点骨骼数），同一位置同镜头对比。
+5. 仅关闭 `Graphics.CapBoneWeights`（每顶点骨骼数；需先手动开启），同一位置同镜头对比。
 
 方山主因在 GPU 侧。原先怀疑是 Desert `DayNightProfile` 的全屏效果，**已实测证伪**：`_GlobalHazeAmount` 运行时实际只有 0.016，几乎等于关闭，对应的热浪补丁已移除。当前判断指向 8 套角色的渲染成本（十几个 Renderer/人，其中 4-5 个是纯阴影重复网格，且游戏完全没有角色 LOD）。补丁能从代码侧碰的部分：MSAA（关掉还顺带恢复 STP）、每顶点骨骼数，以及待实现的近/中距角色 LOD。阴影距离/级联属于游戏自带设置，由你在菜单里调，补丁不再覆盖。
 
@@ -224,8 +228,8 @@ BepInEx 版本 / 其它模组数量：
 本轮启用键（仅列 true）：
 启动状态摘要（registered/enabled/applied/skipped/failed 数量与异常项及 Reason）：
 退出时是否 verified uninstall 失败：
-热重载自测结果（含 Transpiler）：
-第一层结果（A1–A9、B1–B13、C1–C8、D1–D3、组合长时）：
+热重载自测结果（含分组开关与引擎标志时序两项）：
+第一层结果（A1–A8、B1–B13、C1–C8、D1–D3、组合长时）：
 第二层结果（掉落物数量、爆炸卡顿、人数阶梯、流畅度）：
 第三层结果（本轮实验项、专用观察点）：
 无插件基准对比：
@@ -241,7 +245,13 @@ BepInEx 版本 / 其它模组数量：
 - 插件不提供帧率计数，流畅度请外部工具或主观记录并与无插件基准对比。
 - 单项失败被隔离，报告写明具体项与原因。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
-- 本轮新增的 5 项补丁与 2 条非 Harmony 车道（见 2.6）同样尚未完成游戏内验证。
-- **默认关闭的 6 项在一次静态审计后做过实质修改**（`RemoteRagdollLodPhysics` 不再回灌目标高度、`RemoteClusterAnimationThrottle` 失败后交回原版且旋转双保险复原、三处补上 `__runOriginal`、移除每部件路径上的诊断打点）。修改后**全部未经游戏内验证**，开启前请先按 D1/E1/E2 逐项走查，不要一次全开。
-- 第二轮复核（在本轮改动之上）又改了四处，同样未经游戏内验证：`StatusEmitterScan` 的警告分支不再提前 return 且距离改回真实开方（A8 的中毒速率对比是唯一验收）、`ParticleCountCullerWrite` 改为读写前先比对引擎里的现值（A9 增加蜂群消散观察）、`BinocularSunGuard` 增加 `MainCamera.instance` 与 `AchievementManager` 判空（A6 增加机场场景）、`RemoteClusterAnimationThrottle` 补回 `SyncLayers`（E1/E2 观察远端 IK 手部位置）。
+- **本轮（1.2.0）的全部改动都未经游戏内验证。** 按验收优先级排列：
+  1. **A5（表情轮）是最高优先级** —— 1.1.0 引入了一个真实的功能性回归（角色已死或已结算且 `refs.stats`/`input` 缺失时，守卫会把原版的「关闭表情轮」分支一起跳过，导致表情轮 UI、光标与暂停菜单卡住）。本轮重写了守卫使其精确复刻原版的两处短路。必须实测死亡/观战/结算三种状态下的开合。
+  2. **B13（爆炸）** —— 基础上限从 3/1 降到 2/1（主炸药 10→5 球），并新增了震动变弱这个代价声明。同时确认了火箭/背包/GhostBall 的爆炸不含 `ExplosionEffect`、完全不受本补丁影响。
+  3. **D1/E1/E2（六项默认关闭）** —— 距离基准改为观察对象、crouch/sprint 纳入不降级、warmup 改按物理步、tick 号改双精度、相位改哈希、失败闩锁改按角色。开启前逐项走查，不要一次全开。
+  4. **A6/A8（两个守卫与孢子）** —— 望远镜补了 `Center` 守卫且消除了诊断假阳性；孢子的 `EndFX` 次序改回原版同序、`Center` 异常改为真正消除。
+  5. **热重载 4/5 两步（分组与引擎标志时序）** —— 分组改为原子安装、引擎标志改为在补丁变更前落下，这两条只能靠日志顺序验收。
+- **`ParticleCountCullerWrite` 已在 1.2.0 删除**：用 UnityPy 解码全部 16 个 `.assets` 与 14 个 level 后确认，`ParticleCountCuller` 这个组件在原版资产里**零个实例**（MonoScript 存在只说明类被编进程序集）。该补丁的收益在原版恒等于零，故按「无实现/无收益即删除」的既有原则移除。因此补丁数从 45 降为 44、开关从 41 降为 40、默认开启从 39 降为 38。
 - 卡死（Windows AppHangB1）排查：静态审计在这 6 项里没有发现任何无限循环、锁或跨线程等待，因此单靠代码结构无法解释主线程完全不响应。判定方法只有一个——把插件 DLL 移出 `plugins` 跑一局同样条件的对照。
+- 以下事实由资产解码确认，可直接引用：`ExplosionEffect` 全库仅 3 个实例（三个 Dynamite 系预制体，主炸药 3/2 = 10 球、Small/Fae 3/0 = 4 球）；`StatusEmitter` 1571 个 + `WindAffectedStatusEmitter` 108 个，均无距离门控；`GenericOptimizer` 2133 个实例的 `rangeToDisableScripts` 全部被序列化值覆写为 82m 或 60m（不是代码默认的 `+inf`）；孢子云的 `Particles` 子物体挂了 `ParticleCuller`（`cullDistance = 100`，管 2 个粒子系统），但它只 `Play`/`Stop` 粒子、管不到 `StatusEmitter`，且 `ParticleManager` 每帧只扫 3 个 culler；游戏 100% 使用 `LoadSceneMode.Single`，地图段落切换是同场景 `Map` 子树的 `SetActive`。
+- 以下项仍**未验证**，不要当已验证用：orb 的网格填充与两个粒子系统各占多少帧时间（需运行期 profiler）；`Phase` 输出的实际分布（需运行期直方图）；第三方模组是否做 additive 场景加载或添加 `ParticleCountCuller`（未反编译 18 个插件）；Mono 的委托 invoke stub 是间接跳转还是地址快照（两种情况下「委托命中 Harmony detour」的结论都成立）。

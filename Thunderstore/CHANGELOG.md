@@ -1,6 +1,124 @@
 # Changelog
 
+## 1.2.0
+
+44 patches and 40 switches, down one from 1.1.0: `ParticleCountCullerWrite` was removed. A third
+audit pass, this time with the shipped game assets decoded rather than only the decompiled code,
+which corrected several claims this mod had been making since 1.0.0 - including the one that made
+that patch pointless. One of the fixes is a behaviour regression 1.1.0 introduced; the rest are
+correctness, blast-radius and honesty repairs.
+
+### Removed
+
+- `ParticleCountCullerWrite`. Decoding every `.assets` file and every level shows the component it
+  patches, `ParticleCountCuller`, has **zero instances** in the shipped game - the class is compiled
+  into the assembly but nothing carries it. Its target method is therefore never called, so the patch
+  could only ever cost a detour. It followed the rule the reserved config keys and `JointProjection`
+  were dropped under: a patch whose win is provably zero does not ship.
+
+### The regression, first
+
+- `EmoteWheelGuard` could leave the emote wheel stuck open. Vanilla short-circuits in two places -
+  `canEmote` returns early for a dead character without reading `refs.stats`, and
+  `canEmote && input.emoteIsPressed` never touches `input` when `canEmote` is false - so on those
+  frames vanilla does not throw at all; it falls through and *closes* an open wheel. The guard was
+  skipping the whole method there, suppressing that close and latching `usingEmoteWheel`, which also
+  latches the pause-menu gate, the cursor lock and a movement gate. The guard now mirrors both short
+  circuits and only skips a frame where vanilla would genuinely dereference a null. Introduced by the
+  `input` check added in 1.1.0.
+
+### What the assets said
+
+- An explosion was never 13 orbs. The `4 / 2` defaults in `ExplosionEffect` are overridden by the
+  serialized values on the three prefabs that actually carry the component: the main dynamite is
+  `3 / 2`, i.e. **10** orbs, and the small and fae variants are `3 / 0`, i.e. **4**. The old cap of
+  `3 / 1` therefore did nothing at all to the first number. The cap is now `2 / 1`: 5 orbs on the
+  main dynamite, 3 on the variants.
+- `ExplosionScale` does not cover every explosion. Reverse-resolving every `explosionPrefab`
+  reference in the asset library finds exactly three `ExplosionEffect` instances, all dynamite. The
+  rocket, rocket-pack and ghost-ball explosions instantiate prefabs whose cost is in particle
+  systems and which carry no `ExplosionEffect` at all, so they are untouched. Said plainly in the
+  README now instead of being listed as covered.
+- Fewer orbs also means a softer camera shake. Every orb prefab carries two self-firing
+  `AddScreenshake` children, and the game *stacks* those rather than replacing them, so orb count and
+  shake strength move together. That is a second visual cost this mod was not declaring. It is
+  declared now; the switch stays on by default, because the explosion case is the one where the
+  default-off rule would leave the worst stutter in the mod unaddressed.
+- The claim that shrinking the orbs is where most of the win comes from is withdrawn, and this one is
+  now settled rather than merely unproven: both particle systems inside an orb are authored with a
+  *local* scaling mode, so the root scale the shrink writes never reaches them. Their particle sizes,
+  burst counts and lifetimes are unaffected. The shrink only reduces the orb's sphere mesh, so the
+  count reduction is what cuts the particle work, the mesh work and the screen shake together.
+
+### Two more asset corrections, no code change
+
+- The spore volumes really do run unthrottled: 1571 `StatusEmitter` plus 108
+  `WindAffectedStatusEmitter` instances exist and nothing distance-gates them. The game's own script
+  disabler, `GenericOptimizer`, is only on arrow shooters and venus fly traps. The spore clouds do
+  carry a `ParticleCuller` on their particle child, but it only starts and stops the particles - it
+  cannot touch the damage volume, and the manager that drives it visits three cullers per frame.
+- `GenericOptimizerRange` is worth more than its own comment claimed, not less. All 2133
+  `GenericOptimizer` instances override the range with a finite value (82m or 60m); the
+  `float.PositiveInfinity` in the class is only the field default, and serialized values win.
+
+### Correctness
+
+- `StatusEmitterScan` restored vanilla's ordering in the warning-end branch. It cleared the
+  in-zone flag *after* calling the screen effect, so an effect that threw left the flag set and the
+  branch re-entered - and re-threw - every following frame, where vanilla's single throw is
+  self-limiting.
+- `StatusEmitterScan` now reads `__runOriginal`. It is a full replacement with side effects - it
+  applies spore damage and mutates a static dictionary - and without that parameter another mod's
+  decision to suppress the original was silently ignored.
+- `StatusEmitterScan` no longer reaches its static overlap dictionary through reflection on the hot
+  path, and its two deferral paths were reworked: an unavailable ragdoll centre is now *handled*
+  rather than handed back for the original to throw on again, and the afflictions check moved to the
+  point where vanilla actually dereferences it, which is a damage tick rather than every frame.
+- The distance tier of `RemoteRagdollLod` measures from whoever you are watching, not from your own
+  character. While spectating or after a warp those are different points, and the old basis could
+  freeze the pose of someone standing right in front of the camera.
+- A downgraded remote character no longer keeps a stale crouch or sprint height. The two target
+  heights are written only by the method the tier skips, and they feed the standing force and the
+  ground-check ray length, so a pose change now returns the character to full behaviour.
+- The warm-up before a first downgrade counts physics steps instead of rendered frames. It exists to
+  guarantee the animation targets have been written at least once, and those are produced per physics
+  step, so at a high frame rate the old count could elapse before a single one had run.
+- The physics-step index is derived from `Time.fixedTimeAsDouble`. The float it used accumulates from
+  process start and eventually stops being able to separate two adjacent steps.
+- The phase that staggers throttled characters no longer uses the low bits of the Unity instance id.
+  Objects created in one batch get consecutive ids, so with an interval of two every remote character
+  could land on the same tick - turning the flat cost the stagger exists to spread back into a spike.
+- A failing replacement in `RemoteClusterAnimationThrottle` now disables itself for that one
+  character rather than for the whole session, with a process-wide cap for genuinely systemic
+  failures.
+
+### Blast radius
+
+- A switch that covers several patches is now installed all-or-nothing. If one member cannot install,
+  the ones that did are withdrawn and reported, because those sets exist precisely because a
+  half-installed combination is a state nothing was reasoned about.
+- Turning off the Snowball guard no longer leaves `Physics.reuseCollisionCallbacks` on for a frame.
+  The flag is lowered before any patch toggle and re-armed after, instead of waiting for the next
+  frame's poll - that window ran vanilla Snowball against exactly the reused instance the flag's
+  safety argument depends on it not seeing.
+- Both engine-level lanes now restore only their own write, and only while it is still the live
+  value, and they re-sample on every enable. Previously the collision flag was written back
+  unconditionally, which would clobber another mod that had set it, and both lanes could restore a
+  stale snapshot after an off/on cycle.
+- The two Snowball patches finally register their `Reset`; it had been dead code.
+- A patch whose `Reset` threw is no longer reported as installed forever. It used to answer "already
+  installed" to every later enable while its Harmony methods were long gone.
+- A failed startup now shuts the engine-level lanes down even when the Harmony uninstall did not
+  fully succeed. The component keeps receiving `Update` either way.
+- `BinocularSunGuard` also guards the ragdoll centre the method dereferences past its own guard
+  clause, and it now reproduces vanilla's short-circuit before checking anything behind it, so a
+  non-Mesa or night-time frame no longer books repair reasons vanilla never earned. Those counters
+  are quoted as evidence of vanilla defects, so a false positive costs more than the branch.
+
+None of the above is verified in game yet. See TESTING.md.
+
 ## 1.1.0
+
 
 Same 45 patches and 41 switches as 1.0.0, no additions and no removals. This release is a second audit pass that corrects four equivalence defects, widens two guards, and fixes `ExplosionScale`, whose cluster reduction turned out not to trigger in the case it was written for.
 
@@ -36,7 +154,7 @@ First public release. 45 patches, 41 switches, 39 patches enabled by default.
 
 ### Vanilla fault repairs
 
-Seven guards that remove per-frame exception floods. Each skips only the frame whose data is missing and defers to the untouched original otherwise.
+Eight guards that remove per-frame exception floods. Each skips only the frame whose data is missing and defers to the untouched original otherwise.
 
 - `RunBasedValues` - null run-data dictionaries during serialization
 - `RopeSegmentGuard` - empty rope segment list while climbing (184 exceptions in one session)

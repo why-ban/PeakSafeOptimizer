@@ -37,6 +37,25 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// evaluation keeps them stale but semantically correct, which is the same choice
     /// RemoteClusterAnimationThrottle makes for the same reason.
     ///
+    /// The staleness that follows from that choice is bounded by the shared helper rather than
+    /// ignored. Verified consequences of freezing the two heights:
+    ///   * Both consumers do run for remote characters. CharacterMovement.FixedUpdate
+    ///     (CharacterMovement.cs:283-317) has no IsLocal / photonView.IsMine gate at all; the only
+    ///     local-only gates in that class are in Update (:181) and TryJetpack/JetpackRPC (:410, :569).
+    ///     So RaycastGroundCheck (:286, ray length targetHipHeight + 0.3f at :877) and Stand
+    ///     (:288-291, InverseLerp around targetHeadHeight at :690-699) both execute for every
+    ///     character on this client. This defect is therefore real, not theoretical.
+    ///   * The only writer of either field in the whole assembly is
+    ///     CharacterRagdoll.SaveAdditionalTransformPositions (CharacterRagdoll.cs:208 and :215), which
+    ///     is exactly what this patch skips - nothing else can refresh them while downgraded.
+    ///   * The pose inputs that change those heights are data.isCrouching and data.isSprinting
+    ///     (CharacterData.cs:156 and :86), neither of which was in the fallback list.
+    /// The fix lives in RemoteRagdollLod.PoseFlags: a change in either flag forces the character back
+    /// to TierFull and re-arms the warm-up, so the heights are re-derived at full fidelity across the
+    /// whole crouch/sprint blend before any further downgrade. Outside such a transition the two
+    /// heights are genuinely constant for a standing or walking character, so freezing them is
+    /// invisible.
+    ///
     /// Likewise SetPhysicsMats stops re-asserting the collider friction material while downgraded.
     /// That is safe because the material selection is driven by currentRagdollControll
     /// (CharacterRagdoll.cs:89-96) and a value below 0.9 is one of the shared fallback conditions:

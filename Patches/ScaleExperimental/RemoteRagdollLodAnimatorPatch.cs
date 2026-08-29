@@ -62,6 +62,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Character.CharacterRefs), "animationPositionTransform", typeof(UnityEngine.Transform));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "myersDistance", typeof(float));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "inWater", typeof(float));
+            // Also read by the replacement body: the throw countdown it advances and the grounded
+            // timer its emote-cancel condition tests. Both are direct compile-time field references,
+            // so with requireCurrentMvid these can only fail together with the whole patch - asserted
+            // anyway so the validation list matches the set of members the replacement touches.
+            ScaleValidation.RequireInstanceField(typeof(CharacterAnimations), "throwTime", typeof(float));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "sinceGrounded", typeof(float));
             ScaleValidation.RequireInstanceField(typeof(CharacterInput), "movementInput", typeof(UnityEngine.Vector2));
             ScaleValidation.RequireInstanceField(typeof(CharacterInput), "jumpWasPressed", typeof(bool));
             // Proof that HandleIK is still maintained outside Update, which the safety argument
@@ -142,8 +148,17 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             }
         }
 
-        internal static bool Prefix(CharacterAnimations __instance)
+        internal static bool Prefix(CharacterAnimations __instance, bool __runOriginal)
         {
+            // Another Prefix on CharacterAnimations.Update may already have decided to skip it.
+            // HarmonyX calls every Prefix and only combines their verdicts afterwards, so reading
+            // __runOriginal is what keeps this lane exclusive with any other patch on the same target.
+            // No such patch exists in this plugin today, but the replacement below writes Animator
+            // parameters and advances throwTime/sinceEmoteStart, so running it after someone else has
+            // already suppressed the original would double-advance those timers.
+            if (!__runOriginal)
+                return false;
+
             AccessTools.FieldRef<CharacterAnimations, Character> characterRef = _character;
             if (characterRef == null)
             {

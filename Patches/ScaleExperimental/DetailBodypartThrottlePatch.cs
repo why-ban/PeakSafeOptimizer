@@ -221,14 +221,16 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
 
             // Stable per-part phase so the detail parts of a character do not all execute on the
-            // same frame, which would trade a flat cost for a periodic spike. GetInstanceID is
-            // stable for the lifetime of the part; the modulo is taken before Math.Abs so
-            // int.MinValue cannot overflow it.
-            int phase = Math.Abs(__instance.GetInstanceID() % Interval);
+            // same tick, which would trade a flat cost for a periodic spike. RemoteRagdollLod.Phase
+            // mixes the instance id before the modulo: raw `id % Interval` collapses to one phase for
+            // objects created in the same batch (which a player rig is), which would invert the whole
+            // point of the phase. It is a pure function of the id, so the phase is stable for the
+            // lifetime of the part, and it is overflow safe for int.MinValue.
+            int phase = RemoteRagdollLod.Phase(__instance.GetInstanceID(), Interval);
             // Use the physics tick rather than Time.frameCount. When Unity runs multiple physics
             // steps inside one rendered frame, each step gets its own deterministic decision instead
             // of creating consecutive runs and consecutive gaps.
-            int physicsTick = Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
+            int physicsTick = PhysicsTick();
             if ((physicsTick + phase) % Interval == 0)
                 return true;
 
@@ -243,6 +245,20 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             return !ShouldThrottle(owner);
         }
 
+        /// <summary>
+        /// Physics-step index. Delegates to <see cref="RemoteRagdollLod.PhysicsTick"/> so the two
+        /// lanes can never disagree about which step they are on, and so the double-precision
+        /// derivation lives in one place. Verified safe to call even when this patch is enabled and
+        /// the RemoteRagdollLod group is not: PhysicsTick reads only Time.fixedTimeAsDouble and
+        /// Time.fixedDeltaTime and touches none of that class's fields, so it does not require
+        /// Acquire() to have run. (It used to be an inline
+        /// Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime) duplicated in two places here;
+        /// Time.fixedTime is a float accumulated from process start, which loses the resolution to
+        /// separate adjacent steps in a long session and shifts if anything writes
+        /// Time.fixedDeltaTime.)
+        /// </summary>
+        private static int PhysicsTick() => RemoteRagdollLod.PhysicsTick();
+
         private static bool ShouldThrottle(Character c)
         {
             ConditionalWeakTable<Character, State> states = _states;
@@ -252,7 +268,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (states == null || grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
                 return false;
 
-            int physicsTick = Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
+            int physicsTick = PhysicsTick();
             bool hasState = states.TryGetValue(c, out State state);
             if (hasState && state.LastPhysicsTick == physicsTick)
                 return state.LastResult;
@@ -404,6 +420,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceProperty(typeof(CharacterData), "dead", typeof(bool));
             ScaleValidation.RequireInstanceProperty(
                 typeof(CharacterData), "currentRagdollControll", typeof(float));
+
+            // Physics-step index source, used through RemoteRagdollLod.PhysicsTick. Asserted here as
+            // well because this patch has its own toggle and can be installed while the
+            // RemoteRagdollLod group is not, so it must fail closed on its own if the double
+            // precision property ever disappears.
+            ScaleValidation.RequireStaticProperty(typeof(Time), "fixedTimeAsDouble", typeof(double));
 
             // Proof that the load-bearing part of the physics loop is still where the safety argument
             // assumes it is (CharacterMovement.cs:304-315). None of these is patched or called here.

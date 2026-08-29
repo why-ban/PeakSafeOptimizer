@@ -36,9 +36,15 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// introduced anywhere, so the patches cannot inject a NaN.
     ///
     /// The fallback list below guarantees that the local character, bots, the spectated character,
-    /// zombies, the scoutmaster, the spectated character, warping, carried/carrying, grabbed,
-    /// climbing, dead, fully passed out, kinematic and partially ragdolled characters are never
-    /// downgraded.
+    /// zombies, the scoutmaster, warping, carried/carrying, grabbed, climbing, dead, fully passed
+    /// out, kinematic and partially ragdolled characters are never downgraded. A crouch/sprint pose
+    /// change and an item change additionally force a character back to full behaviour and re-arm the
+    /// warm-up window.
+    ///
+    /// Distances are measured from Character.observedCharacter (falling back to
+    /// Character.localCharacter), i.e. from what the camera is looking through rather than from
+    /// whichever character this client owns. Those two differ while spectating, and the visible
+    /// consequence of confusing them is a frozen pose right in front of the camera.
     /// </summary>
     internal static class RemoteRagdollLod
     {
@@ -55,17 +61,42 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private const float ExitDistance = 50f;
         private const float FullRagdollControlThreshold = 0.9f;
         /// <summary>
-        /// Frames a character must be seen at full behaviour before it may be downgraded for the
-        /// first time. This exists for correctness, not for smoothing: Bodypart.SaveAnimationData
-        /// (the producer of targetOffsetRelativeToHip / targetForward / targetUp) only runs inside
-        /// CharacterRagdoll.FixedUpdate. A character that is already beyond the enter distance on its
-        /// very first evaluated frame would otherwise be downgraded before those targets were ever
-        /// written, and any later Bodypart.SnapToAnim - which CharacterRagdoll.SnapToAnimation calls
-        /// directly from the item-equip coroutine (CharacterItems.cs:613-627) - would then snap every
-        /// bodypart onto the hip, because WorldTargetPos() = hip + Vector3.zero. The warm-up
-        /// guarantees the animation targets exist before any downgrade.
+        /// Distinct *physics steps* a character must be seen at full behaviour before it may be
+        /// downgraded, counted from first sight and re-armed on every item or pose change. Two
+        /// separate correctness requirements share this one window:
+        ///
+        /// 1. Animation targets must exist. Bodypart.SaveAnimationData (the producer of
+        ///    targetOffsetRelativeToHip / targetForward / targetUp) only runs inside
+        ///    CharacterRagdoll.FixedUpdate. A character already beyond the enter distance on its very
+        ///    first evaluated frame would otherwise be downgraded before those targets were ever
+        ///    written, and any later Bodypart.SnapToAnim - which CharacterRagdoll.SnapToAnimation
+        ///    calls directly from the item-equip coroutine (CharacterItems.cs:613-628) - would then
+        ///    snap every bodypart onto the hip, because WorldTargetPos() = hip + Vector3.zero.
+        ///    One physics step is not enough on its own: the very first CharacterRagdoll.FixedUpdate
+        ///    of a character returns right after SetPhysicsMats through the firstFrame branch
+        ///    (CharacterRagdoll.cs:153-158) and produces no targets at all, so the window has to span
+        ///    strictly more than one step.
+        /// 2. Pose changes must be given time to blend. While downgraded, data.targetHeadHeight and
+        ///    data.targetHipHeight are frozen at their last really-evaluated values (see
+        ///    RemoteRagdollLodPhysicsPatch for why re-deriving them from a physics pose is wrong),
+        ///    and their consumers - CharacterMovement.Stand (CharacterMovement.cs:690-699) and
+        ///    RaycastGroundCheck (:874-877) - do run for remote characters. A crouch or sprint
+        ///    transition changes both heights, so the window has to be long enough for the animator
+        ///    to blend into the new pose while the character is still fully evaluated. 15 steps is
+        ///    0.3s at the default 50Hz fixed step. The exact blend length lives in the animator asset
+        ///    and is not visible in the decompiled source, so 0.3s is a judgement call rather than a
+        ///    derived number; it is the same order as the game's own crouch-related timings
+        ///    (CharacterMovement.cs:240 uses a 0.2s sinceGrounded window, CharacterAnimations damps its
+        ///    pose parameters over 0.125-0.25s). Erring long only delays a downgrade.
+        ///
+        /// Counted in physics steps rather than rendered frames on purpose: the producer in (1) is
+        /// driven by FixedUpdate, so at 200fps over a 50Hz fixed step a frame-counted window could
+        /// elapse without a single target write. The counter advances at most once per rendered frame,
+        /// because the decision cache below answers repeat calls within a frame from cache, so when
+        /// several physics steps share one rendered frame the window ends up longer than 15 steps
+        /// rather than shorter - erring long only delays a downgrade, which is the safe direction.
         /// </summary>
-        private const int WarmupFrames = 5;
+        private const int WarmupPhysicsSteps = 15;
         /// <summary>
         /// Recency window that keeps a character at full behaviour around an item equip, where
         /// CharacterRagdoll.FixedUpdate and SnapToAnimation are invoked directly rather than by
@@ -85,8 +116,22 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             internal int LastFrame = int.MinValue;
             internal bool LastResult;
             internal int LastItemId = int.MinValue;
-            /// <summary>Distinct frames seen at full behaviour; capped at <see cref="WarmupFrames"/>.</summary>
-            internal int FullFrames;
+            /// <summary>
+            /// Packed crouch/sprint flags last seen at evaluation time, or int.MinValue before the
+            /// first sight. See <see cref="PoseFlags"/> for why these two states are tracked.
+            /// </summary>
+            internal int LastPoseFlags = int.MinValue;
+            /// <summary>
+            /// Distinct physics steps seen at full behaviour; capped at
+            /// <see cref="WarmupPhysicsSteps"/>.
+            /// </summary>
+            internal int FullSteps;
+            /// <summary>
+            /// Physics step on which <see cref="FullSteps"/> was last incremented. The warm-up is
+            /// counted per physics step because its producer runs in FixedUpdate, while the decision
+            /// cache below stays per rendered frame; the two counters must therefore be separate.
+            /// </summary>
+            internal int LastWarmupTick = int.MinValue;
 
             /// <summary>
             /// Separate per-physics-tick cache for <see cref="ShouldThrottleAnimation"/>. It uses its
@@ -96,6 +141,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             internal int ThrottleTick = int.MinValue;
             internal bool ThrottleResult;
             internal int ThrottleItemId = int.MinValue;
+            internal int ThrottlePoseFlags = int.MinValue;
         }
 
         private static ConditionalWeakTable<Character, State> _states;
@@ -194,9 +240,31 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
 
             CharacterData data = c.data;
-            Character.CharacterRefs refs = c.refs;
+            // c.refs is deliberately not read here. An earlier version fetched it and required it to
+            // be non-null, but nothing below used the value, and TryGetCenter re-reads refs with its
+            // own null handling - so the check was a dead read whose stated precondition was not a
+            // precondition of anything.
+            // Two different reference frames, deliberately kept apart:
+            //   local            = "which character is mine". Used by the fallback list for the
+            //                      c == local and photonView.IsMine identity tests. It must stay the
+            //                      local character even while spectating, because owning a character
+            //                      has nothing to do with where the camera is.
+            //   viewpointCharacter = "what the camera is looking through". Used only as the distance
+            //                      origin. Character.observedCharacter is MainCameraMovement's spec
+            //                      target and falls back to localCharacter itself (Character.cs:
+            //                      203-214), so after the local character dies and the player starts
+            //                      spectating, the camera is somewhere else entirely. Measuring
+            //                      distance from the local corpse instead of the camera would freeze
+            //                      the pose of a character standing five metres in front of the
+            //                      spectating player, which is directly visible.
+            // Mixing the two would either downgrade the character the camera is following or stop
+            // downgrading everyone whenever the two differ, so they are never interchangeable.
             Character local = Character.localCharacter;
-            if (data == null || refs == null || local == null)
+            // Static property: read once into a local, then null-checked.
+            Character viewpointCharacter = Character.observedCharacter;
+            if (viewpointCharacter == null)
+                viewpointCharacter = local;
+            if (data == null || local == null || viewpointCharacter == null)
                 return false;
 
             int frame = Time.frameCount;
@@ -214,7 +282,27 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             {
                 state.LastItemId = itemId;
                 state.Tier = TierFull;
-                state.FullFrames = 0;
+                state.FullSteps = 0;
+                state.LastWarmupTick = int.MinValue;
+                state.LastResult = false;
+                state.LastFrame = frame;
+                return false;
+            }
+
+            // Same mechanism for the crouch/sprint pose, and for the same class of reason: the two
+            // stand heights are frozen while downgraded, so a pose change has to be evaluated at full
+            // behaviour long enough for the animator to blend into it. See PoseFlags.
+            int poseFlags = PoseFlags(data);
+            if (state.LastPoseFlags == int.MinValue)
+            {
+                state.LastPoseFlags = poseFlags;
+            }
+            else if (state.LastPoseFlags != poseFlags)
+            {
+                state.LastPoseFlags = poseFlags;
+                state.Tier = TierFull;
+                state.FullSteps = 0;
+                state.LastWarmupTick = int.MinValue;
                 state.LastResult = false;
                 state.LastFrame = frame;
                 return false;
@@ -226,16 +314,69 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (state.LastFrame == frame)
                 return state.LastResult;
 
-            bool warmed = state.FullFrames >= WarmupFrames;
-            bool result = warmed && Evaluate(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef, state.Tier);
+            bool warmed = state.FullSteps >= WarmupPhysicsSteps;
+            bool result = warmed && Evaluate(
+                c, data, local, viewpointCharacter, grabJoint, grabbedPlayerRef, grabbingPlayerRef, state.Tier);
             if (!warmed)
-                state.FullFrames++;
+            {
+                // Counted per physics step, not per rendered frame: the animation targets the warm-up
+                // waits for are produced by CharacterRagdoll.FixedUpdate. The decision cache above
+                // stays per rendered frame; only this counter changes unit.
+                int warmupTick = PhysicsTick();
+                if (state.LastWarmupTick != warmupTick)
+                {
+                    state.LastWarmupTick = warmupTick;
+                    state.FullSteps++;
+                }
+            }
             // A fallback hit or a near distance both mean "full behaviour", so re-entry always has
             // to cross the enter distance again.
             state.Tier = result ? TierPassiveRagdoll : TierFull;
             state.LastFrame = frame;
             state.LastResult = result;
             return result;
+        }
+
+        /// <summary>
+        /// Crouch and sprint packed into one int so a change in either can be detected with a single
+        /// comparison and without allocating.
+        ///
+        /// Why these two specifically: while a character is downgraded,
+        /// RemoteRagdollLodPhysicsPatch skips SaveAdditionalTransformPositions, so
+        /// data.targetHeadHeight and data.targetHipHeight keep the value from the last real
+        /// evaluation (re-deriving them from the physics pose is the self-reinforcing sag described in
+        /// that patch). Verified that both values really are consumed for remote characters:
+        /// CharacterMovement.FixedUpdate (CharacterMovement.cs:283-317) has no IsLocal or
+        /// photonView.IsMine gate anywhere - the only local-only gates in that class are in Update
+        /// (:181) and in TryJetpack/JetpackRPC (:410, :569) - so RaycastGroundCheck (:286 -> :874-877,
+        /// which uses targetHipHeight as its ray length) and Stand (:288-291 -> :690-699, which uses
+        /// targetHeadHeight as its InverseLerp target) both run for every character on this client,
+        /// remote ones included. Neither field is in the fallback list, and neither
+        /// CharacterMovement.SetMovementState (which is IsMine gated, :224) nor the crouch RPC
+        /// (:216-220) nor CharacterSyncer (CharacterSyncer.cs:110, isSprinting) touches the heights;
+        /// only CharacterRagdoll.SaveAdditionalTransformPositions writes them
+        /// (CharacterRagdoll.cs:208, :215 - the only two writes in the whole assembly). A remote
+        /// character crouching or sprinting 60m away would therefore keep standing to its previous
+        /// height and ground-check with its previous ray length until it came back inside the exit
+        /// distance. Both flags do arrive on this client for a remote character - isCrouching through
+        /// the RPCA_SetCrouch RPC sent to RpcTarget.All (CharacterMovement.cs:212-220) and isSprinting
+        /// through the sync stream (CharacterSyncer.cs:110) - so the change is observable here on the
+        /// tick it happens. Treating a change as "return to full behaviour and re-arm the warm-up"
+        /// costs one warm-up window per crouch or sprint transition and removes the stale-height window
+        /// entirely.
+        ///
+        /// Accepted cost of that choice: a remote character that toggles sprint or crouch more often
+        /// than once per warm-up window never gets downgraded at all. That is the vanilla behaviour it
+        /// would have had anyway, i.e. the failure mode is "no optimisation", and the alternative - a
+        /// character standing 80m away at a stale head height while its animation says it is crouched -
+        /// is a visible physics artefact. Erring towards full behaviour is the only safe direction here.
+        /// </summary>
+        private static int PoseFlags(CharacterData data)
+        {
+            int flags = data.isCrouching ? 1 : 0;
+            if (data.isSprinting)
+                flags |= 2;
+            return flags;
         }
 
         /// <summary>
@@ -263,14 +404,26 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             CharacterData data = c.data;
             Character local = Character.localCharacter;
-            if (data == null || local == null)
+            // Read the static property once; the fallback keeps the "never reduce the character the
+            // camera is looking through" test meaningful even before a spec target exists.
+            Character viewpointCharacter = Character.observedCharacter;
+            if (viewpointCharacter == null)
+                viewpointCharacter = local;
+            if (data == null || local == null || viewpointCharacter == null)
                 return false;
 
             State state = states.GetOrCreateValue(c);
             int itemId = data.currentItem != null ? data.currentItem.GetInstanceID() : 0;
-            if (state.ThrottleItemId != itemId)
+            int poseFlags = PoseFlags(data);
+            // Symmetrical with ShouldDowngrade's item/pose gates: a change in either invalidates the
+            // cached answer for this tick. The pose gate matters less here than there (this lane keeps
+            // evaluating the graph, just at a lower rate, so the heights are at most Interval-1 ticks
+            // stale rather than frozen), but a crouch or sprint transition is exactly the moment where
+            // a one-tick-old height is most visible, so it yields for one tick as well.
+            if (state.ThrottleItemId != itemId || state.ThrottlePoseFlags != poseFlags)
             {
                 state.ThrottleItemId = itemId;
+                state.ThrottlePoseFlags = poseFlags;
                 state.ThrottleResult = false;
                 state.ThrottleTick = PhysicsTick();
                 return false;
@@ -280,17 +433,74 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (state.ThrottleTick == tick)
                 return state.ThrottleResult;
 
-            bool result = PassesFallbacks(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef);
+            bool result = PassesFallbacks(
+                c, data, local, viewpointCharacter, grabJoint, grabbedPlayerRef, grabbingPlayerRef);
             state.ThrottleTick = tick;
             state.ThrottleResult = result;
             return result;
         }
 
         /// <summary>
-        /// Physics-step index, matching the expression used by the other physics-phase patches so
-        /// several of them cannot disagree about which step they are on.
+        /// Physics-step index, shared by every physics-phase patch in this lane so several of them
+        /// cannot disagree about which step they are on.
+        ///
+        /// Computed from Time.fixedTimeAsDouble rather than Time.fixedTime. fixedTime accumulates from
+        /// process start and never resets on a scene reload, so in a long session the float mantissa is
+        /// no longer fine enough to separate two adjacent 0.02s steps, and any component that writes
+        /// Time.fixedDeltaTime (UnityEngine.AdaptivePerformanceModule's AdaptivePhysics does) shifts the
+        /// quotient as well. Either makes the floor repeat or skip a step index; a repeat costs one
+        /// throttled tick (the cluster lane sees LastTick == tick and yields), a skip clears
+        /// PendingDeltaTime and shows up as one very short animation stall. The double property
+        /// (UnityEngine/Time.cs:63, unused by the game) has enough mantissa for any realistic session.
+        ///
+        /// The floor is taken in double and only the final integer is narrowed - narrowing the quotient
+        /// to float first would have thrown away exactly the precision this is here for, since a float
+        /// stops representing consecutive integers above 2^24 (~93 hours at 50Hz). The int itself wraps
+        /// after 2^31 steps, about 497 days of continuous play at 50Hz, which is well past any session.
+        /// A zero or non-finite fixed step would make the quotient non-finite and the narrowing
+        /// implementation defined; that is unchanged from the previous float expression, is not
+        /// reachable while physics is stepping, and the one lane that could act on such a value
+        /// (RemoteClusterAnimationThrottle) validates Time.fixedDeltaTime itself before asking for the
+        /// tick.
+        ///
+        /// Pure computation: it reads two Unity statics and touches none of this class's fields, so it
+        /// is safe to call from a patch that has not called <see cref="Acquire"/>.
         /// </summary>
-        internal static int PhysicsTick() => Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime);
+        internal static int PhysicsTick() =>
+            (int)Math.Floor(Time.fixedTimeAsDouble / Time.fixedDeltaTime);
+
+        /// <summary>
+        /// Maps a Unity instance id to a phase in [0, interval).
+        ///
+        /// Why not `id % interval`: Unity hands out instance ids in a dense run to objects created in
+        /// the same batch, and a character rig is one such batch, so with interval 2 the low bit is
+        /// very often the same for every remote character in the lobby. All of them would then evaluate
+        /// on the same tick, which inverts the point of having a phase at all - the flat cost this is
+        /// supposed to spread becomes a spike every interval ticks. One xorshift-multiply finalizer
+        /// round decorrelates the low bits from the allocation order before the modulo, which is enough
+        /// for the two small intervals in use (2 and 3) and costs a handful of integer ops.
+        ///
+        /// Properties preserved: the phase is a pure function of the id, so it is stable for the
+        /// object's lifetime (a phase that flipped between ticks would defeat the throttle entirely);
+        /// there is no allocation, which matters because this runs per character - or per bodypart -
+        /// per physics step; and it cannot overflow. The sign bit is masked off before the modulo, so
+        /// the result is already non-negative and the int.MinValue trap that made the original write
+        /// `Math.Abs(x % interval)` instead of `Math.Abs(x) % interval` cannot arise. unchecked keeps
+        /// the multiplies from throwing if the assembly is ever built with /checked+.
+        /// </summary>
+        internal static int Phase(int instanceId, int interval)
+        {
+            unchecked
+            {
+                uint x = (uint)instanceId;
+                x ^= x >> 16;
+                x *= 0x7feb352du;
+                x ^= x >> 15;
+                x *= 0x846ca68bu;
+                x ^= x >> 16;
+                return (int)(x & 0x7fffffffu) % interval;
+            }
+        }
 
         /// <summary>
         /// Fallback list plus distance hysteresis. Returns true only when this remote character is
@@ -300,17 +510,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             Character c,
             CharacterData data,
             Character local,
+            Character viewpointCharacter,
             Func<CharacterData, UnityEngine.Object> grabJoint,
             AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
             AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef,
             int tier)
         {
-            if (!PassesFallbacks(c, data, local, grabJoint, grabbedPlayerRef, grabbingPlayerRef))
+            if (!PassesFallbacks(c, data, local, viewpointCharacter, grabJoint, grabbedPlayerRef, grabbingPlayerRef))
                 return false;
 
-            if (!TryGetCenter(local, out Vector3 localCenter) || !TryGetCenter(c, out Vector3 center))
+            // Measured from the viewpoint, not from the local character: see the comment on the two
+            // locals in ShouldDowngrade.
+            if (!TryGetCenter(viewpointCharacter, out Vector3 viewpointCenter) ||
+                !TryGetCenter(c, out Vector3 center))
                 return false;
-            float distance = Vector3.Distance(localCenter, center);
+            float distance = Vector3.Distance(viewpointCenter, center);
             if (float.IsNaN(distance))
                 return false;
 
@@ -323,11 +537,18 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// Everything except the distance term: a remote, player-controlled, fully controlled,
         /// non-interacting character. Any hit means "never reduce anything for this character".
         /// Ordered cheapest first.
+        ///
+        /// <paramref name="local"/> and <paramref name="viewpointCharacter"/> are not
+        /// interchangeable: the identity tests below ask "is this my own character", which is a
+        /// question about ownership, so they use <paramref name="local"/> even while spectating. Only
+        /// the observed-character test and the distance term in <see cref="Evaluate"/> are about where
+        /// the camera is.
         /// </summary>
         private static bool PassesFallbacks(
             Character c,
             CharacterData data,
             Character local,
+            Character viewpointCharacter,
             Func<CharacterData, UnityEngine.Object> grabJoint,
             AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
             AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef)
@@ -367,7 +588,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // Written as >= so that a NaN control value also falls back.
             if (!(data.currentRagdollControll >= FullRagdollControlThreshold))
                 return false;
-            if (Character.observedCharacter == c)
+            // Uses the local already read by the caller rather than reading the static property a
+            // second time, so the identity test and the distance origin cannot disagree within one
+            // evaluation.
+            if (viewpointCharacter == c)
                 return false;
             return true;
         }
@@ -435,10 +659,19 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isVineClimbing", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isKinecmatic", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "sinceItemAttach", typeof(float));
+            // Pose flags: read by PoseFlags to force a downgraded character back to full behaviour
+            // while its frozen stand heights are re-derived.
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isCrouching", typeof(bool));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isSprinting", typeof(bool));
             ScaleValidation.RequireInstanceProperty(typeof(CharacterData), "currentItem", typeof(Item));
             ScaleValidation.RequireInstanceProperty(typeof(CharacterData), "dead", typeof(bool));
             ScaleValidation.RequireInstanceProperty(
                 typeof(CharacterData), "currentRagdollControll", typeof(float));
+
+            // Physics-step index source. Asserted so a build that no longer exposes the double
+            // property fails closed here instead of silently reverting to the float precision the
+            // tick index used to have.
+            ScaleValidation.RequireStaticProperty(typeof(Time), "fixedTimeAsDouble", typeof(double));
 
             // Proof that the load-bearing part of the physics loop is still where the safety
             // argument assumes it is. None of these is patched or called from here.
@@ -454,13 +687,29 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Bodypart), "ApplyForces", typeof(void), Type.EmptyTypes, false);
 
             // Proof of the warm-up rationale: these are the only producers/consumers of the
-            // animation targets that a premature downgrade could leave unwritten.
+            // animation targets that a premature downgrade could leave unwritten, and the firstFrame
+            // field is the branch that makes the very first physics step of a character produce no
+            // targets at all (CharacterRagdoll.cs:153-158), which is why the warm-up has to span more
+            // than one step.
+            ScaleValidation.RequireInstanceField(typeof(CharacterRagdoll), "firstFrame", typeof(bool));
             ScaleValidation.RequireInstanceMethod(
                 typeof(Bodypart), "SaveAnimationData", typeof(void), Type.EmptyTypes, true);
             ScaleValidation.RequireInstanceMethod(
                 typeof(Bodypart), "SnapToAnim", typeof(void), Type.EmptyTypes, true);
             ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterRagdoll), "SnapToAnimation", typeof(void), Type.EmptyTypes, true);
+
+            // Proof that the two consumers of the frozen stand heights really do run for remote
+            // characters, which is what makes the crouch/sprint pose gate necessary (see PoseFlags).
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "targetHeadHeight", typeof(float));
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "targetHipHeight", typeof(float));
+            ScaleValidation.RequireInstanceMethod(
+                typeof(CharacterMovement), "Stand", typeof(void), Type.EmptyTypes, false);
+            ScaleValidation.RequireInstanceMethod(
+                typeof(CharacterMovement), "RaycastGroundCheck", typeof(void), Type.EmptyTypes, false);
+            ScaleValidation.RequireInstanceMethod(
+                typeof(CharacterRagdoll), "SaveAdditionalTransformPositions", typeof(void),
+                Type.EmptyTypes, false);
         }
     }
 }

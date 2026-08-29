@@ -37,8 +37,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///   * The graph is in DirectorUpdateMode.Manual (CharacterRagdoll.cs:59-60), so this call is the
     ///     only thing that advances animation time. Skipping ticks would therefore slow the animation
     ///     down - which is why the execute tick is handed the accumulated delta time of every tick
-    ///     since the previous evaluation. Total animation time stays exact; only the temporal
-    ///     resolution drops to 50/N Hz.
+    ///     since the previous evaluation. Inside a continuous throttled stretch the animation clock is
+    ///     exact and only its temporal resolution drops to 50/N Hz. Crossing *out* of the throttle is
+    ///     the one exception: the accumulator has to be dropped there because the original advances by
+    ///     a full fixedDeltaTime of its own, which costs up to (N-1) * fixedDeltaTime of animation time
+    ///     per crossing. See <see cref="Yield"/> for why that is accepted rather than fixed.
     ///   * RotateCharacter/ResetRotation cancel each other out (CharacterRagdoll.cs:193-202): the
     ///     first sets refs.rigCreator.transform.rotation, the second restores the value captured in
     ///     the same call. They exist so the graph evaluates against a look-rotated root, so on a tick
@@ -66,7 +69,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// <see cref="RemoteRagdollLod.ShouldThrottleAnimation"/>, i.e. the audited fallback list with the
     /// distance term removed, so the local character, the spectated character, bots, zombies, the
     /// scoutmaster, and anyone climbing, grabbing, carrying, warping, dead, passed out, kinematic,
-    /// partially ragdolled or inside the item-equip window keeps vanilla behaviour on every tick.
+    /// partially ragdolled or inside the item-equip window keeps vanilla behaviour on every tick. A
+    /// crouch or sprint transition also yields for a tick, so the two stand heights described above are
+    /// refreshed at full rate exactly when they change.
     /// </summary>
     internal static class RemoteClusterAnimationThrottlePatch
     {
@@ -77,12 +82,35 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// offers.
         /// </summary>
         private const int Interval = 2;
+        /// <summary>
+        /// Process-wide backstop for the per-instance failure latch below. A malformed character (a
+        /// custom model without a rigCreator, say) is expected to fail on every tick, and its own
+        /// latch already handles that in one catch. This counter exists only for the case where the
+        /// failure is systemic rather than per character - a game update that changes the call
+        /// sequence, for example - where every character in the lobby would otherwise pay one
+        /// exception and one catch. 8 is chosen as "clearly more than a full lobby's worth of
+        /// one-off latches" (PEAK caps at 4 players, plus bots/zombies/scoutmaster which the fallback
+        /// list already excludes) while still being reached almost immediately when the cause is
+        /// systemic. Failures are counted for the lifetime of the installation, not per tick, because
+        /// each character can only contribute one: after its own latch is set it never enters the
+        /// replacement again.
+        /// </summary>
+        private const int MaxTotalFailures = 8;
 
         private sealed class State
         {
             internal int LastTick = int.MinValue;
             /// <summary>Delta time of every tick since the last evaluation, including this one.</summary>
             internal float PendingDeltaTime;
+            /// <summary>
+            /// Set once the replacement has failed for *this* CharacterRagdoll. From then on this one
+            /// character defers to the untouched original forever, while every other character keeps
+            /// being throttled. Per instance rather than per process because the most likely causes
+            /// are per character - a malformed rig, or a transient like rigCreator.transform being
+            /// destroyed during a scene change - and letting one such character disable the lane for
+            /// everybody was silently giving up the whole optimisation.
+            /// </summary>
+            internal bool DisabledAfterFailure;
         }
 
         private static AccessTools.FieldRef<CharacterRagdoll, Character> _character;
@@ -95,9 +123,19 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private static ConditionalWeakTable<CharacterRagdoll, State> _states;
         private static bool _acquired;
         /// <summary>
-        /// Set once the replacement has failed. From then on every call defers to the untouched
-        /// original, so a persistent failure degrades to vanilla behaviour instead of repeating an
-        /// exception, a catch and a diagnostics hit for every character on every physics step.
+        /// Number of distinct characters whose replacement has failed since installation. Each
+        /// character can contribute at most one, because its own <see cref="State.DisabledAfterFailure"/>
+        /// keeps it out of the replacement afterwards. Once this reaches
+        /// <see cref="MaxTotalFailures"/> the whole lane defers to the original for every character:
+        /// that many independent failures means the cause is the call sequence itself, not one bad
+        /// rig.
+        /// </summary>
+        private static int _failureCount;
+        /// <summary>
+        /// Set when <see cref="_failureCount"/> reaches <see cref="MaxTotalFailures"/>. From then on
+        /// every call defers to the untouched original, so a systemic failure degrades to vanilla
+        /// behaviour instead of repeating an exception, a catch and a diagnostics hit for every
+        /// character on every physics step.
         /// </summary>
         private static bool _disabledAfterFailure;
 
@@ -171,7 +209,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _resetRotation = null;
             _saveAdditionalTransformPositions = null;
             _states = null;
+            // Both halves of the failure latch are cleared: the process-wide backstop here, and every
+            // per-instance flag together with the table that held them on the line above.
             _disabledAfterFailure = false;
+            _failureCount = 0;
             if (_acquired)
             {
                 _acquired = false;
@@ -193,7 +234,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (!__runOriginal)
                 return false;
 
-            // A previous replacement threw; never try again for the rest of this session.
+            // Enough independent characters have failed that the cause cannot be one bad rig; the
+            // whole lane defers to the original for the rest of the session.
             if (_disabledAfterFailure)
                 return true;
 
@@ -229,6 +271,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             int tick = RemoteRagdollLod.PhysicsTick();
             State state = states.GetOrCreateValue(__instance);
+            // This one character's replacement has already failed once; it alone stays on the
+            // original. Checked after the state lookup because that is where the flag lives, and
+            // before any bookkeeping so a latched character behaves exactly like an unpatched one.
+            if (state.DisabledAfterFailure)
+                return YieldState(state);
             // A manual FixedUpdate() call from the equip coroutine lands on the same tick as the
             // Unity one (CharacterItems.cs:613-628). Those are excluded by the fallback list, but if
             // one ever reaches here it must not consume a second slice of delta time - and the
@@ -245,8 +292,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             state.PendingDeltaTime = Mathf.Min(state.PendingDeltaTime + deltaTime, deltaTime * Interval);
 
             // Per-instance phase so remote characters do not all evaluate on the same tick, which
-            // would trade a flat cost for a periodic spike.
-            int phase = Math.Abs(__instance.GetInstanceID() % Interval);
+            // would trade a flat cost for a periodic spike. The id is mixed before the modulo
+            // (RemoteRagdollLod.Phase): with Interval == 2 a raw `id % 2` is just the low bit of the
+            // instance id, and Unity hands out ids in a dense run to objects created in the same
+            // batch, so the characters of one lobby very often share a parity - every one of them
+            // would then evaluate on the same tick and the spike this phase exists to prevent would be
+            // exactly what it produced. The mix is a pure function of the id, so the phase is still
+            // stable for the instance's lifetime, allocation free, and safe for int.MinValue.
+            int phase = RemoteRagdollLod.Phase(__instance.GetInstanceID(), Interval);
             bool evaluate = (tick + phase) % Interval == 0;
             if (!evaluate)
             {
@@ -262,22 +315,58 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             // The replacement failed. It has already restored the rig rotation it changed, so this
             // tick stays skipped - handing it to the original as well would run RotateCharacter a
-            // second time on the same tick. Every later tick goes back to the original.
-            _disabledAfterFailure = true;
+            // second time on the same tick. Every later tick for *this* character goes back to the
+            // original; other characters are unaffected unless the failure count shows the cause is
+            // systemic.
+            state.DisabledAfterFailure = true;
+            state.PendingDeltaTime = 0f;
+            state.LastTick = int.MinValue;
+            _failureCount++;
+            if (_failureCount >= MaxTotalFailures && !_disabledAfterFailure)
+            {
+                _disabledAfterFailure = true;
+                // Reachable at most once per installation, so a Hit here cannot become a hot-path cost.
+                RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.lane-disabled");
+            }
             return false;
         }
 
         /// <summary>
         /// Hands this tick back to the untouched original. That call advances the animation by one
         /// fixedDeltaTime itself, so the accumulator is dropped rather than carried across the gap.
+        ///
+        /// Known and accepted limitation of dropping it: if the tick before this one was a
+        /// non-evaluating tick, its accumulated delta time is lost, so the animation of this character
+        /// falls behind by up to (Interval - 1) * fixedDeltaTime - one fixed step, ~20ms at the default
+        /// 50Hz - each time it crosses into a fallback state (starts climbing, gets grabbed, swaps an
+        /// item, comes into the equip window...). The loss is monotone but not cumulative in any
+        /// visible sense: it is bounded per boundary crossing, and crossings happen at human rates
+        /// while ticks happen 50 times a second, so it cannot become a perceptible speed difference.
+        /// Inside a continuous throttled stretch the animation clock is exact, which is the property
+        /// the accumulator exists to provide.
+        ///
+        /// Considered and rejected: evaluating once with the accumulated delta time here, before
+        /// handing the tick over. That would put two evaluations on the same tick - the replacement's
+        /// and the original's - which means two RotateCharacter calls, and the second would capture the
+        /// already look-rotated rig root as its rotationBefore (CharacterRagdoll.cs:193-197) and leave
+        /// the root permanently skewed. Also rejected: carrying the remainder into the next tick, which
+        /// would double-count it because the original always advances by a full fixedDeltaTime of its
+        /// own regardless of what happened before. Neither is worth a permanently skewed rig or a
+        /// fast-running animation to recover 20ms at a state transition, so the behaviour is left as
+        /// it is.
         /// </summary>
         private static bool Yield(ConditionalWeakTable<CharacterRagdoll, State> states, CharacterRagdoll instance)
         {
             if (states.TryGetValue(instance, out State state) && state != null)
-            {
-                state.PendingDeltaTime = 0f;
-                state.LastTick = int.MinValue;
-            }
+                return YieldState(state);
+            return true;
+        }
+
+        /// <summary>Same as <see cref="Yield"/> for a state that is already in hand.</summary>
+        private static bool YieldState(State state)
+        {
+            state.PendingDeltaTime = 0f;
+            state.LastTick = int.MinValue;
             return true;
         }
 
@@ -423,6 +512,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // CharacterRagdoll.Start is where Stop() + SetTimeUpdateMode(Manual) happen.
             ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterRagdoll), "Start", typeof(void), Type.EmptyTypes, false);
+            // The physics-step index this patch throttles on comes from RemoteRagdollLod.PhysicsTick,
+            // whose Time.fixedTimeAsDouble assertion runs in RemoteRagdollLod.Acquire - which this
+            // patch's Initialize always calls - so it is not repeated here.
         }
     }
 }

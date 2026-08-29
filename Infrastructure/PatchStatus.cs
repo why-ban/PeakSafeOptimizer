@@ -30,6 +30,12 @@ namespace PeakSafeOptimizer.Infrastructure
         /// certified. Structural-only guards may still validate and run on an unknown build.
         /// </summary>
         SkippedUncertifiedBuild,
+        /// <summary>
+        /// This patch belongs to a group that is only correct as a whole, and at least one other
+        /// member of that group could not be installed, so the whole group was rolled back. The
+        /// reason names the member that failed and why.
+        /// </summary>
+        SkippedGroupIncomplete,
         FailedFactory,
         FailedInitialize,
         FailedResolve,
@@ -78,6 +84,7 @@ namespace PeakSafeOptimizer.Infrastructure
                 case PatchResult.SkippedStructureMismatch:
                 case PatchResult.SkippedIlMismatch:
                 case PatchResult.SkippedUncertifiedBuild:
+                case PatchResult.SkippedGroupIncomplete:
                     return PatchOutcome.Skipped;
                 default:
                     return PatchOutcome.Failed;
@@ -105,6 +112,25 @@ namespace PeakSafeOptimizer.Infrastructure
         public BuildFingerprint Fingerprint { get; internal set; }
 
         internal void Add(PatchStatusEntry entry) => _entries.Add(entry);
+
+        /// <summary>
+        /// Replaces the first entry with this name, or appends when there is none. Used by group
+        /// rollback: a patch that installed and was then withdrawn because a sibling failed must be
+        /// reported once, as withdrawn, rather than twice with contradictory results.
+        /// </summary>
+        internal void Replace(string name, PatchStatusEntry entry)
+        {
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                if (string.Equals(_entries[i].Name, name, StringComparison.Ordinal))
+                {
+                    _entries[i] = entry;
+                    return;
+                }
+            }
+            _entries.Add(entry);
+        }
+
         internal void AddModuleFailure(ModuleDiscoveryFailure failure) => _moduleFailures.Add(failure);
 
         public int AppliedCount => _entries.Count(x => x.Outcome == PatchOutcome.Applied);

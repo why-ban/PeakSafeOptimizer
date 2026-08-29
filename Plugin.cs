@@ -18,7 +18,7 @@ namespace PeakSafeOptimizer
     {
         public const string PluginGuid = "com.peak.safeoptimizer";
         public const string PluginName = "PeakSafeOptimizer";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.2.0";
 
         private Harmony _harmony;
         private LifecycleRegistry _lifecycle;
@@ -45,6 +45,10 @@ namespace PeakSafeOptimizer
 
                 _harmony = new Harmony(PluginGuid);
                 _installer = new PatchInstaller(_harmony, fingerprint, Logger);
+                // Group membership drives all-or-nothing installation: a switch that covers several
+                // patches must never leave them half installed, because those sets are only correct
+                // together (see OptimizerConfig.GetGroupMembers).
+                _installer.SetGroupResolver(_settings.GetGroupMembers);
                 PatchCatalogSnapshot catalog = PatchCatalog.Discover(typeof(Plugin).Assembly, _settings, _lifecycle, Logger);
                 PatchStatus status = _installer.Install(catalog);
                 // Multi-line, item-by-item report. Every line keeps the "PeakSafeOptimizer" prefix so
@@ -84,9 +88,13 @@ namespace PeakSafeOptimizer
             }
 
             bool fullyUninstalled = UninstallAll("Startup rollback");
+            // Engine-global state is restored either way: it is not tied to whether the Harmony
+            // uninstall succeeded, and this component keeps receiving Update after a failed Awake,
+            // so leaving the lanes armed would keep writing engine state for a plugin that has
+            // already given up.
+            ShutdownGlobalLanes();
             if (fullyUninstalled)
             {
-                ShutdownGlobalLanes();
                 DisposeLifecycle("Startup rollback");
                 _lifecycle = null;
                 _harmony = null;
@@ -116,14 +124,18 @@ namespace PeakSafeOptimizer
 
                 // ConfigEntry.Value changes before BepInEx raises SettingChanged. Queue background
                 // writes instead of letting the visible setting and installed Harmony state diverge.
+                //
+                // One id per switch, not one per patch: the installer now installs and removes a whole
+                // group as a unit, so handing it every member would repeat the same work and report
+                // "already installed" for the rest.
+                if (ids.Count == 0)
+                    return;
+                PatchId representative = ids[0];
                 bool offMainThread = Thread.CurrentThread.ManagedThreadId != _mainThreadId;
-                for (int i = 0; i < ids.Count; i++)
-                {
-                    if (offMainThread)
-                        _pendingSettingChanges.Enqueue(ids[i]);
-                    else
-                        ApplySettingChange(ids[i]);
-                }
+                if (offMainThread)
+                    _pendingSettingChanges.Enqueue(representative);
+                else
+                    ApplySettingChange(representative);
             }
             catch (Exception ex)
             {
@@ -149,7 +161,19 @@ namespace PeakSafeOptimizer
             if (_settings == null || _installer == null)
                 return;
             bool enabled = _settings.IsEnabled(id);
+
+            // Engine-global state comes down before the patch set changes, and goes back up from the
+            // Update poll afterwards. Physics.reuseCollisionCallbacks is only safe while both Snowball
+            // guards are live, and this call happens synchronously while Evaluate is polled once per
+            // frame - so without this the window between them would run vanilla Snowball against a
+            // reused Collision instance.
+            _collisionReuse?.SuspendForPatchChange();
+
             PatchStatus status = _installer.Toggle(id, enabled);
+            // Re-arm immediately rather than waiting for the next frame's poll, so a toggle that
+            // leaves both guards installed does not lose the flag for a frame.
+            _collisionReuse?.Evaluate(_installer);
+
             PatchStatusEntry entry = status.Entries.Count > 0 ? status.Entries[0] : null;
             if (entry == null)
                 return;
@@ -169,6 +193,17 @@ namespace PeakSafeOptimizer
                 case PatchOutcome.Failed:
                     Logger.LogError($"HotReload: {id} {entry.Result}: {entry.Reason}");
                     break;
+            }
+
+            // A group switch produces one entry per member; report the rest too, so a rollback is
+            // visible in the log instead of only its first line.
+            for (int i = 1; i < status.Entries.Count; i++)
+            {
+                PatchStatusEntry extra = status.Entries[i];
+                if (extra.Outcome == PatchOutcome.Failed)
+                    Logger.LogError($"HotReload: {extra.Name} {extra.Result}: {extra.Reason}");
+                else
+                    Logger.LogInfo($"HotReload: {extra.Name} {extra.Result}: {extra.Reason}");
             }
         }
 

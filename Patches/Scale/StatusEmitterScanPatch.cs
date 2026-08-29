@@ -33,6 +33,11 @@ namespace PeakSafeOptimizer.Patches.Scale
     ///   * The overlap map is looked up once with TryGetValue instead of a ContainsKey plus three
     ///     string-keyed indexer lookups.
     ///
+    /// Field writes keep vanilla's order as well as its values. In particular the warning-end block
+    /// clears <c>inZone</c> before touching the overlay (StatusEmitter.cs:65-69), because the overlay
+    /// call can throw on a destroyed Renderer and vanilla's ordering is what makes that throw
+    /// self-limiting rather than per-frame.
+    ///
     /// The damage itself is untouched: amount, tickTime, the two fade curves, minAmount and the
     /// AddStatus/SubtractStatus calls are reproduced verbatim, including the `debug` field write that
     /// vanilla performs as a side effect of the clamp (:109).
@@ -46,7 +51,6 @@ namespace PeakSafeOptimizer.Patches.Scale
         private static AccessTools.FieldRef<StatusEmitter, float> _timeSinceLastTick;
         private static AccessTools.FieldRef<StatusEmitter, float> _tickTime;
         private static AccessTools.FieldRef<StatusEmitter, bool> _inZone;
-        private static Func<Dictionary<string, StatusEmitter>> _overlapMap;
 
         internal static void Initialize()
         {
@@ -58,7 +62,10 @@ namespace PeakSafeOptimizer.Patches.Scale
                 typeof(StatusEmitter), "tickTime", typeof(float));
             FieldInfo inZone = ScaleValidation.RequireInstanceField(
                 typeof(StatusEmitter), "inZone", typeof(bool));
-            FieldInfo overlapMap = ScaleValidation.RequireStaticField(
+            // Structural assertion only: the replacement reads this public static field directly (see
+            // the Prefix), but the fail-closed precondition still has to hold - if the field is
+            // renamed, retyped or made non-static, the patch must not install.
+            ScaleValidation.RequireStaticField(
                 typeof(StatusEmitter),
                 "overlapPreventedStatusEmitters",
                 typeof(Dictionary<string, StatusEmitter>));
@@ -125,27 +132,13 @@ namespace PeakSafeOptimizer.Patches.Scale
                 AccessTools.FieldRefAccess<StatusEmitter, float>(tickTime);
             AccessTools.FieldRef<StatusEmitter, bool> inZoneRef =
                 AccessTools.FieldRefAccess<StatusEmitter, bool>(inZone);
-            Func<Dictionary<string, StatusEmitter>> map =
-                (Func<Dictionary<string, StatusEmitter>>)Delegate.CreateDelegate(
-                    typeof(Func<Dictionary<string, StatusEmitter>>),
-                    null,
-                    typeof(StatusEmitterScanPatch).GetMethod(
-                        nameof(ReadOverlapMap), BindingFlags.Static | BindingFlags.NonPublic));
-            if (tickRef == null || tickTimeRef == null || inZoneRef == null || map == null)
+            if (tickRef == null || tickTimeRef == null || inZoneRef == null)
                 throw new InvalidOperationException("StatusEmitterScan accessor creation failed");
-            // Proven above; read through the validated FieldInfo so the delegate cannot drift from it.
-            _overlapFieldInfo = overlapMap;
 
             _timeSinceLastTick = tickRef;
             _tickTime = tickTimeRef;
             _inZone = inZoneRef;
-            _overlapMap = map;
         }
-
-        private static FieldInfo _overlapFieldInfo;
-
-        private static Dictionary<string, StatusEmitter> ReadOverlapMap() =>
-            (Dictionary<string, StatusEmitter>)_overlapFieldInfo.GetValue(null);
 
         internal static MethodInfo ResolveAndValidateTarget()
         {
@@ -158,21 +151,26 @@ namespace PeakSafeOptimizer.Patches.Scale
             _timeSinceLastTick = null;
             _tickTime = null;
             _inZone = null;
-            _overlapMap = null;
-            _overlapFieldInfo = null;
         }
 
-        internal static bool Prefix(StatusEmitter __instance)
+        /// <param name="__runOriginal">
+        /// HarmonyX runs every Prefix on a target and only then decides whether the original body
+        /// executes, so a Prefix that returned false earlier in the chain does not stop this one from
+        /// being called. Reading this flag is mandatory for a full-replacement patch: this body has
+        /// side effects that another mod's `return false` was meant to suppress - it applies spore
+        /// damage through CharacterAfflictions, writes inZone/timeSinceLastTick/isOverlapPriority and
+        /// mutates the static overlap dictionary. Running it anyway would silently defeat that mod.
+        /// </param>
+        internal static bool Prefix(StatusEmitter __instance, bool __runOriginal)
         {
+            if (!__runOriginal)
+                return false;
+
             AccessTools.FieldRef<StatusEmitter, float> tickRef = _timeSinceLastTick;
             AccessTools.FieldRef<StatusEmitter, float> tickTimeRef = _tickTime;
             AccessTools.FieldRef<StatusEmitter, bool> inZoneRef = _inZone;
-            Func<Dictionary<string, StatusEmitter>> map = _overlapMap;
-            if (tickRef == null || tickTimeRef == null || inZoneRef == null || map == null ||
-                __instance == null)
-            {
+            if (tickRef == null || tickTimeRef == null || inZoneRef == null || __instance == null)
                 return true;
-            }
 
             Character local = Character.localCharacter;
             // The original's InRange returns false for a null local character, and every later use of
@@ -180,24 +178,32 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (local == null)
                 return HandleOutOfRange(__instance, inZoneRef, tickRef);
 
-            Character.CharacterRefs refs = local.refs;
-            if (refs == null || refs.afflictions == null)
-            {
-                // The original would throw inside the damage branch; leave that with it.
-                RateLimitedDiagnostics.Hit("StatusEmitterScan.localCharacter-incomplete");
-                return true;
-            }
-
             Vector3 center;
             try
             {
-                // Character.Center indexes partDict directly and throws before the ragdoll registers.
+                // Character.Center indexes partDict directly (Character.cs:266 -> :1299-1302) and
+                // throws KeyNotFoundException before the ragdoll registers its parts.
                 center = local.Center;
             }
             catch (Exception)
             {
+                // In this window the original throws out of InRange (StatusEmitter.cs:53 reads the
+                // same Center) once per emitter per frame, so this is a per-frame vanilla exception
+                // and therefore inside this plugin's remit. Handing the method back would only add a
+                // catch on top of the same exception, so the exception is removed instead: the emitter
+                // is treated as out of range. HandleOutOfRange reads neither Center nor refs, so it
+                // cannot re-enter the failure.
+                //
+                // The state difference against vanilla is bounded and in the safe direction. Vanilla's
+                // exception escapes Update before any write, leaving timeSinceLastTick and inZone as
+                // they were; the out-of-range path clears timeSinceLastTick (and, if a warning was
+                // showing, ends it). Clearing the tick timer can only delay the next damage tick,
+                // never bring it forward, because damage requires timeSinceLastTick >= tickTime - so
+                // the player can get poisoned later than vanilla, never earlier. It is also exactly
+                // the state vanilla itself produces for a character that really is out of range, which
+                // is the honest reading of "the local character has no torso yet".
                 RateLimitedDiagnostics.Hit("StatusEmitterScan.center-unavailable");
-                return true;
+                return HandleOutOfRange(__instance, inZoneRef, tickRef);
             }
 
             Vector3 position = __instance.transform.position;
@@ -215,7 +221,14 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             if (inRange && __instance.preventOverlap)
             {
-                Dictionary<string, StatusEmitter> emitters = map();
+                // Read straight off the public static field. It needs no reflection - this assembly
+                // references Assembly-CSharp and this file already touches public members such as
+                // radius and isOverlapPriority directly - and a FieldInfo.GetValue per emitter per
+                // frame would have cost about as much as the dictionary lookups this patch saves.
+                // The fail-closed precondition is unchanged: Initialize still asserts the field's
+                // name, staticness and exact type before the patch is allowed to install.
+                Dictionary<string, StatusEmitter> emitters =
+                    StatusEmitter.overlapPreventedStatusEmitters;
                 string key = __instance.overlapIdentifier;
                 // A null map or a null key makes the audited ContainsKey/indexer throw. Nothing has
                 // been written yet at this point, so handing the whole method back keeps that
@@ -229,14 +242,23 @@ namespace PeakSafeOptimizer.Patches.Scale
             bool inZone = inZoneRef(__instance);
             if (__instance.inZoneWarning && inZone && (!inRange || __instance.emitterDisabledByWind))
             {
-                // Checked before any state write so that deferring leaves the emitter exactly as the
-                // original found it.
-                if (!__instance.preventOverlap || __instance.isOverlapPriority)
-                {
-                    if (!TryEndWarning())
-                        return true;
-                }
+                // The overlay is resolved - but not called - before any state write, so handing the
+                // method back on a missing GUIManager still leaves the emitter exactly as the original
+                // found it and lets the original's own unguarded dereference stand.
+                bool endOverlay = !__instance.preventOverlap || __instance.isOverlapPriority;
+                ScreenVFX warning = endOverlay ? ResolveWarning() : null;
+                if (endOverlay && warning == null)
+                    return true;
                 inZoneRef(__instance) = false;
+                // State first, overlay second: the audited order (StatusEmitter.cs:65-69). The order
+                // matters for exactly the failure this plugin exists to prevent. EndFX dereferences
+                // ScreenVFX.renderer.material (ScreenVFX.cs:90-93) and that public serialized Renderer
+                // can already be destroyed during scene teardown. With inZone cleared first, a throw
+                // out of EndFX makes this block's condition false on the next frame, so the exception
+                // happens once and stops - vanilla's self-limiting behaviour. Calling EndFX first
+                // would leave inZone true and re-enter, re-throwing every frame.
+                if (endOverlay)
+                    warning.EndFX();
                 // The audited method does not return here: this block is a plain `if`, so control
                 // falls into the second branch, whose condition is now false either way (this block
                 // is only entered when !inRange or the wind disabled the emitter), and from there
@@ -249,6 +271,9 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             if (__instance.inZoneWarning && inRange && !inZone && !__instance.emitterDisabledByWind)
             {
+                // Here vanilla calls StartFX *before* writing inZone (StatusEmitter.cs:73-77), so the
+                // overlay attempt comes first and handing the method back on a missing GUIManager is
+                // still write-free. The apparent asymmetry with the block above is vanilla's own.
                 if (!__instance.preventOverlap || __instance.isOverlapPriority)
                 {
                     if (!TryStartWarning())
@@ -279,7 +304,24 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (sinceTick < tickTimeRef(__instance))
                 return false;
 
-            ApplyDamage(__instance, refs.afflictions, distance, tickTimeRef(__instance));
+            // The afflictions holder is resolved inside ApplyDamage, in the same two branches where
+            // vanilla dereferences it (StatusEmitter.cs:112/116) and no earlier. Checking it at the
+            // top of the method - as this patch used to - abandoned the whole replacement, range test
+            // and warning overlay included, in a window where vanilla still runs all of it; and it
+            // also gave up on emitters vanilla never trips over, since neither dereference is reached
+            // when the faded amount is exactly zero (an emitter with amount == 0, or one sitting
+            // exactly on radius + outerFade, where the audited InverseLerp(a, b, b) degenerates to 0).
+            if (!ApplyDamage(__instance, local, distance, tickTimeRef(__instance)))
+            {
+                // Only reachable where vanilla throws NRE, i.e. on a tick that really would have
+                // applied damage - not every frame. The state left behind matches vanilla's: its
+                // exception escapes before the `timeSinceLastTick = 0f` tail (:119), and this path
+                // likewise leaves the timer at the value just written, so the tick gate stays open and
+                // the next frame retries identically. The exception itself is gone, which is what
+                // makes the diagnostic worth its cost here.
+                RateLimitedDiagnostics.Hit("StatusEmitterScan.afflictions-unavailable");
+                return false;
+            }
             tickRef(__instance) = 0f;
             return false;
         }
@@ -287,7 +329,8 @@ namespace PeakSafeOptimizer.Patches.Scale
         /// <summary>
         /// The audited method with a false InRange and no local character: the warning is ended if it
         /// was showing, otherwise the tick timer is cleared. Returns false unless the original has to
-        /// take over.
+        /// take over. Reads neither Character.Center nor Character.refs, which is what makes it usable
+        /// as the fallback when the torso position cannot be resolved.
         /// </summary>
         private static bool HandleOutOfRange(
             StatusEmitter instance,
@@ -296,12 +339,16 @@ namespace PeakSafeOptimizer.Patches.Scale
         {
             if (instance.inZoneWarning && inZoneRef(instance))
             {
-                if (!instance.preventOverlap || instance.isOverlapPriority)
-                {
-                    if (!TryEndWarning())
-                        return true;
-                }
+                // Resolved before any write so that handing the method back is write-free; called
+                // after the write, because that is vanilla's order and it is what keeps a throw out of
+                // EndFX self-limiting. See the same block in the Prefix.
+                bool endOverlay = !instance.preventOverlap || instance.isOverlapPriority;
+                ScreenVFX warning = endOverlay ? ResolveWarning() : null;
+                if (endOverlay && warning == null)
+                    return true;
                 inZoneRef(instance) = false;
+                if (endOverlay)
+                    warning.EndFX();
                 // Same fall-through as the audited method: the warning block is not an early return.
                 if (instance.emitterDisabledByWind)
                     return false;
@@ -319,9 +366,14 @@ namespace PeakSafeOptimizer.Patches.Scale
         /// Note the original reads <c>amount</c> again for the actual AddStatus (:112) rather than the
         /// faded <c>num</c> it just computed - that is reproduced exactly, faithful bug included,
         /// because changing it would change damage.
+        ///
+        /// The afflictions holder is resolved lazily inside the two branches that use it, which is
+        /// where the original resolves it too, so a null one is only noticed when the original would
+        /// have thrown. Returns false in exactly that case, after the <c>debug</c> write the original
+        /// has already performed by then, and without applying anything.
         /// </summary>
-        private static void ApplyDamage(
-            StatusEmitter instance, CharacterAfflictions afflictions, float distance, float tickTime)
+        private static bool ApplyDamage(
+            StatusEmitter instance, Character local, float distance, float tickTime)
         {
             float faded = instance.amount;
             if (instance.outerFade > 0.01f)
@@ -333,10 +385,32 @@ namespace PeakSafeOptimizer.Patches.Scale
             inner = instance.debug = Mathf.Clamp(1f - inner, instance.minAmount, 1f);
 
             if (faded > 0f)
+            {
+                CharacterAfflictions afflictions = ResolveAfflictions(local);
+                if (afflictions == null)
+                    return false;
                 afflictions.AddStatus(instance.statusType, instance.amount * tickTime * inner);
+            }
             if (faded < 0f)
+            {
+                CharacterAfflictions afflictions = ResolveAfflictions(local);
+                if (afflictions == null)
+                    return false;
                 afflictions.SubtractStatus(
                     instance.statusType, Mathf.Abs(instance.amount * tickTime));
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// <c>Character.localCharacter.refs.afflictions</c> as the original spells it (:112), guarded.
+        /// A NaN or zero faded amount never reaches this, exactly as in the original, where both
+        /// dereferences sit inside the sign tests.
+        /// </summary>
+        private static CharacterAfflictions ResolveAfflictions(Character local)
+        {
+            Character.CharacterRefs refs = local.refs;
+            return refs != null ? refs.afflictions : null;
         }
 
         /// <summary>
@@ -384,18 +458,12 @@ namespace PeakSafeOptimizer.Patches.Scale
             return true;
         }
 
-        private static bool TryEndWarning()
-        {
-            ScreenVFX warning = ResolveWarning();
-            if (warning == null)
-                return false;
-            warning.EndFX();
-            return true;
-        }
-
         /// <summary>
         /// The original dereferences GUIManager.instance.sporesWarning unguarded. Returning null here
         /// makes the caller defer to the untouched original so its own exception behaviour is kept.
+        /// Every caller resolves the overlay before writing any emitter state, which is what makes
+        /// deferring exact - the end-of-warning path then still writes <c>inZone</c> before calling
+        /// EndFX, matching the audited order.
         /// </summary>
         private static ScreenVFX ResolveWarning()
         {
@@ -403,6 +471,13 @@ namespace PeakSafeOptimizer.Patches.Scale
             return gui != null ? gui.sporesWarning : null;
         }
 
+        /// <summary>
+        /// Known limitation: only <c>StatusEmitter</c>'s own assembly is scanned. A subclass declared
+        /// in another assembly - a mod's - that overrides InRange would not be found here, and the
+        /// inlined range test would bypass it. Scanning the whole AppDomain instead was rejected: it
+        /// would make the result depend on which plugins happen to be loaded when this runs, and force
+        /// GetTypes() over every loaded assembly during startup.
+        /// </summary>
         private static void RequireNoInRangeOverride(MethodInfo inRange)
         {
             Assembly assembly = typeof(StatusEmitter).Assembly;

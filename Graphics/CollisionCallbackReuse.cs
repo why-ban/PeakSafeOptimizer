@@ -24,6 +24,23 @@ namespace PeakSafeOptimizer
     /// instance. A full-assembly audit found exactly one such reference in the game:
     /// <c>Snowball._unprocessedContact</c>. This lane therefore only flips the flag once both Snowball
     /// guards are installed, and flips it back when either one is not.
+    ///
+    /// Two exposure surfaces remain, and neither is a cross-frame reference:
+    ///   * The game hands the live Collision to mods itself, through
+    ///     <c>Bodypart.collisionEnterAction</c>/<c>collisionStayAction</c>
+    ///     (<c>public Action&lt;Collision&gt;</c>, Bodypart.cs:55/57, invoked at :242/:251) and
+    ///     <c>CollisionModifier.onCollide</c>
+    ///     (<c>public Action&lt;Character, CollisionModifier, Collision, Bodypart&gt;</c>,
+    ///     CollisionModifier.cs:30, invoked at :67). A subscriber that only reads inside the callback
+    ///     is unaffected; one that stores the instance is not, which is why third-party code stays
+    ///     the surface this lane cannot enumerate and why the flag is off by default.
+    ///   * "Zero allocation" is bounded by who touches <c>.contacts</c>: with reuse on that property
+    ///     is lazy (Collision.cs:66-77 allocates on first read), not absent. The game reads
+    ///     <c>contacts[0]</c> in plenty of places - CharacterMovement.cs:928/948/953,
+    ///     StickyCactus.cs:16, TumbleWeed.cs:90, Breakable.cs:110, SpikeRoller.cs:65 among others -
+    ///     and CharacterMovement.OnCollision is on the bodypart path, so a ragdoll pile touching
+    ///     terrain still allocates one array per such contact. The saving is the Collision object on
+    ///     every reported contact plus the array on every contact nobody inspects.
     /// </summary>
     internal sealed class CollisionCallbackReuse
     {
@@ -31,6 +48,8 @@ namespace PeakSafeOptimizer
         private bool _applied;
         private bool _originalValue;
         private bool _hasOriginalValue;
+        private bool _wrote;
+        private bool _wroteValue;
         private bool _loggedBlocked;
 
         internal CollisionCallbackReuse(ManualLogSource log)
@@ -42,6 +61,15 @@ namespace PeakSafeOptimizer
         /// Idempotent; called after installation and again on any patch toggle. <paramref name="installer"/>
         /// is queried rather than the configuration, so a guard that failed its own structure check
         /// also blocks the flag.
+        ///
+        /// The snapshot/restore contract is the same one BoneWeightCap keeps, because this is a
+        /// process-wide flag other mods may also write:
+        ///   off -&gt; on:  sample the current value, then write true and remember what was written.
+        ///   on  -&gt; on:  nothing happens; the whole method early-outs before any engine access.
+        ///   on  -&gt; off: write the sampled value back only while the flag still holds this lane's
+        ///               own write, then drop the snapshot so the next enable samples afresh.
+        /// Sampling therefore happens on the rising edge only, never on the per-frame poll, and a
+        /// mod that set the flag after this lane did keeps its value.
         /// </summary>
         internal void Evaluate(PatchInstaller installer)
         {
@@ -63,12 +91,13 @@ namespace PeakSafeOptimizer
             {
                 if (wanted)
                 {
-                    if (!_hasOriginalValue)
-                    {
-                        _originalValue = Physics.reuseCollisionCallbacks;
-                        _hasOriginalValue = true;
-                    }
+                    // Rising edge: re-sample. An off->on->off->on cycle must restore whatever the
+                    // flag held at the start of the second on, not a value from before the first.
+                    _originalValue = Physics.reuseCollisionCallbacks;
+                    _hasOriginalValue = true;
                     Physics.reuseCollisionCallbacks = true;
+                    _wroteValue = true;
+                    _wrote = true;
                     _applied = true;
                     _log?.LogInfo(
                         "PeakSafeOptimizer | Physics.reuseCollisionCallbacks = true " +
@@ -91,6 +120,25 @@ namespace PeakSafeOptimizer
                 Restore("shutdown");
         }
 
+        /// <summary>
+        /// Restores the flag before a patch is uninstalled, and is a no-op when the flag is not
+        /// currently held by this lane.
+        ///
+        /// Ordering matters here. The flag's whole safety argument is that Snowball's cross-frame
+        /// <c>Collision</c> reference is guarded, and hot reload removes that guard synchronously
+        /// while <see cref="Evaluate"/> is only polled once per frame from Plugin.Update. Without
+        /// this call the interval between the two would run vanilla
+        /// <c>Snowball.OnCollisionStay</c>/<c>ProcessLastCollision</c> with reuse still on, i.e.
+        /// exactly the aliasing this lane exists to prevent - and <c>contacts[0]</c> on a reused
+        /// instance whose pair has no points would also throw. Turning the flag off first cannot
+        /// break anything: off is the engine default and the state the game ships with.
+        /// </summary>
+        internal void SuspendForPatchChange()
+        {
+            if (_applied)
+                Restore("patch set changing");
+        }
+
         private void Restore(string reason)
         {
             _applied = false;
@@ -98,9 +146,23 @@ namespace PeakSafeOptimizer
                 return;
             try
             {
-                Physics.reuseCollisionCallbacks = _originalValue;
-                _log?.LogInfo(
-                    $"PeakSafeOptimizer | Physics.reuseCollisionCallbacks restored to {_originalValue} ({reason}).");
+                // Only undo this lane's own write, and only while it is still the live value: any
+                // other value belongs to whoever wrote it after this lane did.
+                if (_wrote && Physics.reuseCollisionCallbacks == _wroteValue)
+                {
+                    Physics.reuseCollisionCallbacks = _originalValue;
+                    _log?.LogInfo(
+                        $"PeakSafeOptimizer | Physics.reuseCollisionCallbacks restored to {_originalValue} ({reason}).");
+                }
+                else
+                {
+                    _log?.LogInfo(
+                        "PeakSafeOptimizer | Physics.reuseCollisionCallbacks left as is " +
+                        $"({reason}); its current value is not the one this lane wrote.");
+                }
+                _wrote = false;
+                // Drop the snapshot so a later enable samples the value that is current then.
+                _hasOriginalValue = false;
             }
             catch (Exception ex)
             {

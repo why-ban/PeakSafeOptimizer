@@ -1,4 +1,4 @@
-# PeakSafeOptimizer 0.1.0
+# PeakSafeOptimizer 1.2.0
 
 PEAK 的 BepInEx 5 插件，用于修复已确认的空引用/越界异常，并针对**多人玩家数量**与**地面物品数量**带来的每帧重复计算做保守削减。
 
@@ -12,7 +12,7 @@ PEAK 的 BepInEx 5 插件，用于修复已确认的空引用/越界异常，并
 |---|---|
 | Assembly-CSharp MVID | `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1` |
 | Assembly-CSharp SHA-256 | `b5c1b8b73f82cca847942b0be758dd554fe347d1a7c89c69e292fafb115bfffd` |
-| 插件版本 | `0.1.0` |
+| 插件版本 | `1.2.0` |
 
 SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerprint.Capture()` 在启动时读取游戏 Assembly-CSharp 的 `ModuleVersionId` 得到。
 
@@ -58,7 +58,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 仍未完成：多人压力基准、长时稳定性、性能基准。本文不提供任何帧率数字。
 
-## 已注册补丁（45 个补丁 / 41 个开关）
+## 已注册补丁（44 个补丁 / 40 个开关）
 
 配置文件里的每一个开关都对应真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为开关默认值。
 
@@ -66,9 +66,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 默认关闭的项：`Experimental.RemoteRagdollLod`（一个开关 = 4 个补丁，远距姿态凝固）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）、`Graphics.CapBoneWeights`（关节形变变糙）、`Experimental.CollisionCallbackReuse`（进程级引擎标志）。
 
-**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 45 个补丁对应 41 个开关。
+**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 44 个补丁对应 40 个开关。
 
-### 稳定性修复（`Patches\Stability`，7 项，全部默认开启）
+### 稳定性修复（`Patches\Stability`，8 项，全部默认开启）
 
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
@@ -76,11 +76,10 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.Parachute` | `true` | Fingerprint | Prefix（完整替换）：`CharacterData.UpdateHasParachute()` | 对不完整 character/player/slot/backpack 状态保守清空降落伞缓存，保留 Scoutmaster 与「手持→槽位→背包」优先级。 |
 | `Fixes.RopeSegmentGuard` | `true` | Fingerprint | Prefix：`CharacterRopeHandling.Climbing()` | 当所持绳索的 `GetRopeSegments()` 为 null/空，或 `climbingAPI` 为 null 时跳过该帧攀爬。守卫每帧入口而非底层 API，避免把异常换成 `NullReferenceException`。 |
 | `Fixes.IKItemGuard` | `true` | Fingerprint | Prefix：`CharacterAnimations.ConfigureIK()` | 当 `currentItem` 非空但 prefab 缺 `Hand_R`/`Hand_L` 子节点时跳过该帧手部 IK 定位。只在手部节点缺失时跳过，ReachIK 分支不受影响。 |
-| `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | 当 `Character.localCharacter`、data、refs 或 stats 在观战/重生/退出/第三方调用窗口中不完整时跳过表情轮更新。只读不写。 |
-| `Fixes.BinocularSunGuard` | `true` | Fingerprint | Prefix：`Action_ShowBinocularOverlay.TestLookAtSun()` | 举起望远镜时该方法每帧执行，而原版只判了 `localCharacter`，随后无保护地解引用 `Singleton<MapHandler>.Instance` 与 `DayNightManager.instance.sun`（`Action_ShowBinocularOverlay.cs:40-42`）。实测单局 1544 次逐帧空引用。守卫补齐这三处判空，跳过的唯一后果是该帧不做天文成就判定。 |
+| `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | **只在原版真会解引用空值的那一帧跳过**。原版有两处短路：`canEmote` 在 `data.dead` 时提前返回、不读 `refs.stats`；`canEmote && input.emoteIsPressed` 在 `canEmote` 为假时不碰 `input`。这两种帧原版不抛异常，而是落入 `else if (usingEmoteWheel)` 把表情轮**关掉**。1.1.0 把这条关闭分支一起跳过了，使 `usingEmoteWheel` 锁死，连带暂停菜单、光标锁定与一个移动门控卡住——这是 1.2.0 修掉的功能性回归。现在精确复刻两处短路，其余一律放行。只读不写。 |
+| `Fixes.BinocularSunGuard` | `true` | Fingerprint | Prefix：`Action_ShowBinocularOverlay.TestLookAtSun()` | 举起望远镜时该方法每帧执行，而原版的 guard clause 只判了 `localCharacter`，随后无保护地解引用 `Singleton<MapHandler>.Instance`、`DayNightManager.instance.sun`，以及 guard clause **之后**的 `MainCamera.instance`、`localCharacter.Center`（走 `partDict` 直索引，可抛 `KeyNotFoundException`）与 `Singleton<AchievementManager>.Instance`（`Action_ShowBinocularOverlay.cs:40-55`）。实测单局 1544 次逐帧空引用。守卫补齐这五处，并**先复刻原版的 guard clause**（biome、日照强度）再检查其后三项，避开非方山/夜间下的诊断假阳性。跳过的唯一后果是该帧不做天文成就判定。 |
 | `Fixes.ItemOptimizerDeregisterGuard` | `true` | Fingerprint | Prefix：`Peak.ItemOptimizationManager.DeregisterItem(Item)` | 原版 `ItemOptimizer.OnEnable` 在 item 为 null 时写 `enabled = false`，该写入同步触发 `OnDisable`，后者拿同一个 null 去 `Dictionary.Remove` 并抛 `ArgumentNullException`（`ItemOptimizer.cs:9-24`）。实测 67 次。null 键本就不在字典里，跳过不丢任何条目。 |
-| `Fixes.StatusEmitterScan` | `true` | Fingerprint | Prefix（完整替换）：`StatusEmitter.Update()` | 沼泽/丛林的孢子毒气伤害体积，场景里**每个实例每帧无条件执行**，自身没有距离门控。原版每帧 2–4 次开方距离 + 2–4 次 `partDict` 字典查找解析 `localCharacter.Center`，命中范围时还要做一次字符串键字典查找。本版把范围判定改平方比较（非负数下同侧）、Center 每次调用只解析一次、精确距离只在伤害公式真正需要时开方，重叠优先级字典仅在范围内触碰。伤害公式、`debug` 字段写入与 `AddStatus`/`SubtractStatus` 逐行复刻（含原版复用 `amount` 而非衰减后 `num` 这一处，照抄不改）。`InRange` 是 virtual，Initialize 会扫描全部子类确认无人 override，否则 fail-closed。 |
-| `Fixes.ParticleCountCullerWrite` | `true` | Fingerprint | Prefix（完整替换）：`ParticleCountCuller.Update()` | 孢子云/蘑菇云的距离衰减组件。原版每帧无条件写 `emission.rateOverTimeMultiplier`（native 调用），且**没有 `Character.observedCharacter` 判空**——角色存在前每帧每实例抛 NRE（对比 `ParticleCuller.cs:37-40` 与 `PlayerTrackParticles.cs:34-37` 都判了）。本版补上判空，并只在乘数真正变化时写入；算术逐位保持原样（含 `maxDistance` 被当除数而非区间上界这一处，因为 `attenuationVal` 是序列化字段，场景可能按它调过）。纯视觉：该字段与发射率在全仓没有其它读取者。 |
+| `Fixes.StatusEmitterScan` | `true` | Fingerprint | Prefix（完整替换）：`StatusEmitter.Update()` | 沼泽/丛林的孢子毒气伤害体积，场景里**每个实例每帧无条件执行**，自身没有距离门控。原版每帧 2–4 次开方距离 + 2–4 次 `partDict` 字典查找解析 `localCharacter.Center`，命中范围时还要做一次字符串键字典查找。本版把 Center 与距离每次调用各只解一次并复用，重叠优先级字典从 `ContainsKey` + 三次索引器降为一次 `TryGetValue`。**距离仍是真实开方**：平方比较在阈值附近的舍入带内与开方不同侧，而那一侧是真实伤害 tick（1.1.0 已从平方比较撒回）。资产解码确认全库 1571 个 `StatusEmitter` + 108 个 `WindAffectedStatusEmitter`，且无任何距离门控（`GenericOptimizer` 只挂在弓箭发射器与食人花上）。伤害公式、`debug` 字段写入与 `AddStatus`/`SubtractStatus` 逐行复刻（含原版复用 `amount` 而非衰减后 `num` 这一处，照抄不改）。`InRange` 是 virtual，Initialize 会扫描全部子类确认无人 override，否则 fail-closed。 |
 
 ### 等价改写（`Patches\Equivalent`，1 项）
 
@@ -95,7 +94,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.HeatEmissionScan` | `true` | StrictIl | Prefix（完整替换）：`CharacterHeatEmission.Update()` | 距离判定平方化，等价替换原方法。网络面（读 `photonView.IsMine`），故升级为 StrictIl。 |
 | `Fixes.RagdollPhysicsMats` | `true` | Fingerprint | Prefix：`CharacterRagdoll.SetPhysicsMats()` | 输入签名未变时跳过原方法。签名含摩擦类型、部件/碰撞体计数、材质引用与**每个 Bodypart 全部 collider 的材质 ID**，另有每 300 帧/5 秒强制放行自愈。 |
 | `Fixes.ItemCollisionMode` | `true` | Fingerprint | Prefix：`Item.UpdateCollisionDetectionMode()` | 目标值仍由 `itemState` 决定，仅当 Rigidbody 已是目标值时跳过赋值。 |
-| `Fixes.GenericOptimizerRange` | `true` | Fingerprint | Prefix：`GenericOptimizer.AnyCharacterWithinRange(float)` | 平方距离等价。审计版 `GenericOptimizer` 默认无穷范围时仅增加薄封装；场景配置有限范围时才有收益。 |
+| `Fixes.GenericOptimizerRange` | `true` | Fingerprint | Prefix：`GenericOptimizer.AnyCharacterWithinRange(float)` | 平方距离等价。资产解码确认全库 2133 个 `GenericOptimizer` 实例的 `rangeToDisableScripts` **全部被序列化值覆写为有限值**（弓箭发射器 82m、食人花 60m），代码里的 `float.PositiveInfinity` 只是字段默认值。所以这是每帧每实例每玩家的真实距离比较，平方化有实际收益（旧版注释说「仅增加薄封装」是错的）。 |
 | `Fixes.CampfireProtectionMerge` | `true` | Fingerprint | Prefix：`Campfire.ApplyCampfireProtection()` | 把同帧两次全量扫描合并为一次，单次扫描同时得出 `everyoneInRange` 与 `_charactersInRadius`，再复用于 OrbFogHandler 写入与 buff 分支。 |
 | `Experimental.ZombieScanRange` | `true` | Fingerprint | Prefix：`MushroomZombie.ReadyToDisable()` | 主机侧每帧调用。平方距离 + 两标记都真后提前结束循环；阈值非正回退原方法。 |
 | `Experimental.ZombieSpawnScanRange` | `true` | Fingerprint | Prefix：`MushroomZombieSpawner.ReadyToSpawn()` | 主机侧每帧调用。单阈值平方化，命中即返回；阈值负时回退。 |
@@ -109,7 +108,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Experimental.ItemScaleRedundantWrite` | `true` | StrictIl | Prefix：`ItemScaleSyncer.Update()` | 缩放输入、目标 transform 身份、当前 localScale 全部未变时跳过原方法。owner 缩放变化（可能发 RPC）必定放行，网络面升级 StrictIl。 |
 | `Experimental.RemoteItemInterpolationThreshold` | `true` | StrictIl | Prefix：`ItemPhysicsSyncer.FixedUpdate()` | 远端 Ground 物品已精确到达插值目标时跳过两次无效 Rigidbody 移动；不触碰发包/kinematic。 |
 | `Experimental.EyeLookComponentCache` | `true` | Fingerprint | Prefix（完整替换）：`PlayerEyeLook.Update()` | 逐行复刻原方法，仅把循环内每帧 `GetComponent<AnimatedMouth>` 改为按 Character 缓存。 |
-| `Experimental.ExplosionScale` | `true` | Fingerprint | Prefix：`ExplosionEffect.GetPoints()` | 爆炸球数量自适应削减。原版 13 球；默认近距单发 7 球，邻近集群达到 2 / 5 发时继续降为 5 / 2 球，50–120 米降为 2 球，120 米外仅保留中心球。只减不增、不为负。 |
+| `Experimental.ExplosionScale` | `true` | Fingerprint | Prefix：`ExplosionEffect.GetPoints()` | 爆炸球数与尺寸自适应削减。资产解码确认全库只有 3 个 `ExplosionEffect`（三个 Dynamite 系预制体），主炸药的序列化值是 3/2 = **10 球**（不是代码默认 4/2 算出的 13）、Small/Fae 是 3/0 = 4 球。默认上限 2/1：近距单发 5 球（Small/Fae 3 球）；集群时第 2 发起缩到 85%、第 4 发起降为 2 球 + 60% 尺寸；50–120 米 2 球，120 米外仅中心球。只减不增、不为负。**两项观感代价**：缩放只作用于 orb 的球体网格（orb 内两个粒子系统是 `scalingMode = Local`，不继承父级缩放）；减球数会同比减弱屏幕震动（每球两个叠加式 `AddScreenshake`，20→10→4 次）。伤害/击退/半径均不受影响（在兄弟节点 `AOE` 上）。火箭/背包/GhostBall 的爆炸不含 `ExplosionEffect`，不在本补丁范围。 |
 
 ### 其余等价规模化（`Patches\Scale`，8 项）
 

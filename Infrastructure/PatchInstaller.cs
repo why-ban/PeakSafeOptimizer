@@ -24,6 +24,14 @@ namespace PeakSafeOptimizer.Infrastructure
             internal Action Reset;
             internal CompatibilityLevel Compatibility;
             internal readonly List<PatchMethodRecord> Methods = new List<PatchMethodRecord>();
+
+            /// <summary>
+            /// True when every Harmony method of this patch is confirmed detached but its Reset threw.
+            /// The record is kept so a later shutdown can retry Reset, but the patch is not live: it
+            /// must not be reported as installed, and a re-enable must reinstall it rather than see
+            /// "already installed" and do nothing.
+            /// </summary>
+            internal bool ResetPending;
         }
 
         private const string CertifiedMode = "certified";
@@ -36,10 +44,23 @@ namespace PeakSafeOptimizer.Infrastructure
         private readonly Dictionary<PatchId, InstalledPatch> _installed =
             new Dictionary<PatchId, InstalledPatch>();
 
+        /// <summary>
+        /// Resolves every PatchId that shares one configuration switch with the given one. Set by the
+        /// plugin from <see cref="OptimizerConfig.GetGroupMembers"/>. When it is null every patch is
+        /// treated as its own group, which is what the pre-group behaviour was.
+        /// </summary>
+        private Func<PatchId, IReadOnlyList<PatchId>> _groupResolver;
+
         public PatchInstaller(Harmony harmony, BuildFingerprint fingerprint, ManualLogSource log)
         {
             _harmony = harmony; _fingerprint = fingerprint; _log = log;
         }
+
+        /// <summary>
+        /// Supplies the group membership used for all-or-nothing installation. Optional: without it
+        /// each patch is installed independently.
+        /// </summary>
+        public void SetGroupResolver(Func<PatchId, IReadOnlyList<PatchId>> resolver) => _groupResolver = resolver;
 
         /// <summary>
         /// "certified" when the game assembly MVID equals the audited one, "structural-validation"
@@ -61,19 +82,42 @@ namespace PeakSafeOptimizer.Infrastructure
             PatchStatus status = NewStatus();
             foreach (ModuleDiscoveryFailure failure in catalog.Failures)
                 status.AddModuleFailure(failure);
+
+            // Group members share one switch, so they are all enabled or all disabled together and
+            // only the first one encountered drives the install; the rest are handled with it.
+            var handled = new HashSet<PatchId>();
             foreach (PatchRegistration registration in catalog.Registrations)
             {
-                if (registration.Enabled)
-                    InstallOne(registration.Id, status);
-                else
+                if (handled.Contains(registration.Id))
+                    continue;
+                if (!registration.Enabled)
+                {
+                    handled.Add(registration.Id);
                     status.Add(new PatchStatusEntry(
                         registration.Id.ToString(), false, PatchResult.SkippedDisabled,
                         "disabled by configuration"));
+                    continue;
+                }
+                IReadOnlyList<PatchId> group = ResolveGroup(registration.Id);
+                for (int i = 0; i < group.Count; i++)
+                    handled.Add(group[i]);
+                InstallGroup(group, status);
             }
             return status;
         }
 
-        public bool IsInstalled(PatchId id) => _installed.ContainsKey(id);
+        /// <summary>
+        /// True only when this patch is live. A record whose Harmony methods are all detached but
+        /// whose Reset threw is retained for a later retry and reports false here, because callers
+        /// such as the collision-reuse lane gate engine-wide state on a patch actually being active.
+        /// </summary>
+        public bool IsInstalled(PatchId id) =>
+            _installed.TryGetValue(id, out InstalledPatch installed) && !installed.ResetPending;
+
+        /// <summary>
+        /// True while any record remains, including one that is only kept to retry a failed Reset.
+        /// Shutdown uses this to decide whether static state was proven clean.
+        /// </summary>
         public bool HasInstalledPatches => _installed.Count != 0;
 
         /// <summary>
@@ -81,16 +125,144 @@ namespace PeakSafeOptimizer.Infrastructure
         /// factory→Initialize→ResolveTarget→HarmonyMethod→Patch path, so a patch that cannot validate
         /// itself against the running build still fails closed here).
         /// Enabled=false uninstalls by the recorded patch methods, then runs the optional Reset.
-        /// Every branch is fail-closed and isolated to this one PatchId.
+        /// Every branch is fail-closed and isolated to this one PatchId - or, when the patch shares a
+        /// switch with others, to that whole group, which is installed and removed as a unit.
         /// </summary>
         public PatchStatus Toggle(PatchId id, bool enabled)
         {
             PatchStatus status = NewStatus();
+            IReadOnlyList<PatchId> group = ResolveGroup(id);
             if (enabled)
-                InstallOne(id, status);
+            {
+                InstallGroup(group, status);
+            }
             else
-                UninstallOne(id, status);
+            {
+                for (int i = 0; i < group.Count; i++)
+                    UninstallOne(group[i], status);
+            }
             return status;
+        }
+
+        private IReadOnlyList<PatchId> ResolveGroup(PatchId id)
+        {
+            Func<PatchId, IReadOnlyList<PatchId>> resolver = _groupResolver;
+            if (resolver == null)
+                return new[] { id };
+            try
+            {
+                IReadOnlyList<PatchId> group = resolver(id);
+                if (group == null || group.Count == 0)
+                    return new[] { id };
+                // A resolver that does not report the queried patch as a member would let this
+                // install something the caller did not ask for; fall back to the single patch.
+                for (int i = 0; i < group.Count; i++)
+                {
+                    if (group[i] == id)
+                        return group;
+                }
+                return new[] { id };
+            }
+            catch (Exception ex)
+            {
+                _log?.LogError(
+                    $"Patch group resolution failed safely for {id}; treating it as a single patch: " +
+                    $"{ex.GetType().Name}: {ex.Message}");
+                return new[] { id };
+            }
+        }
+
+        /// <summary>
+        /// Installs every member of a group, and withdraws the ones that succeeded if any member did
+        /// not. A group exists precisely because its members are only correct together (see
+        /// <see cref="OptimizerConfig.GetGroupMembers"/>), so a half-installed group is a state
+        /// nothing was reasoned about: for RemoteRagdollLod it would mean a remote character has its
+        /// animation graph skipped while still being driven towards animation targets, or the reverse.
+        /// A single-member group behaves exactly as the previous per-patch path did.
+        /// </summary>
+        private void InstallGroup(IReadOnlyList<PatchId> group, PatchStatus status)
+        {
+            if (group.Count == 1)
+            {
+                InstallOne(group[0], status);
+                return;
+            }
+
+            var installedNow = new List<PatchId>(group.Count);
+            for (int i = 0; i < group.Count; i++)
+            {
+                PatchId id = group[i];
+                bool wasInstalled = IsInstalled(id);
+                InstallOne(id, status);
+                if (!wasInstalled && IsInstalled(id))
+                    installedNow.Add(id);
+                if (IsInstalled(id))
+                    continue;
+
+                // This member is not live. Withdraw the ones this call brought up, so the group is
+                // either fully present or fully absent.
+                string reason = FindReason(status, id.ToString()) ?? "member did not install";
+                RollBackGroup(group, installedNow, id, reason, status);
+                return;
+            }
+        }
+
+        private void RollBackGroup(
+            IReadOnlyList<PatchId> group,
+            List<PatchId> installedNow,
+            PatchId failedMember,
+            string failedReason,
+            PatchStatus status)
+        {
+            _log?.LogWarning(
+                $"{failedMember} could not be installed, so its whole switch is being rolled back " +
+                $"({installedNow.Count} sibling(s) to withdraw): {failedReason}");
+
+            for (int i = 0; i < installedNow.Count; i++)
+            {
+                PatchId member = installedNow[i];
+                PatchStatus removal = NewStatus();
+                UninstallOne(member, removal);
+                bool stillInstalled = IsInstalled(member);
+                if (stillInstalled)
+                {
+                    // Uninstall failed; UninstallOne already recorded why and kept the record so the
+                    // accessors stay valid under the live Harmony method. Report it as a failure
+                    // rather than pretending the group is clean.
+                    string removalReason = FindReason(removal, member.ToString()) ?? "uninstall incomplete";
+                    status.Replace(member.ToString(), new PatchStatusEntry(
+                        member.ToString(), true, PatchResult.FailedUninstall,
+                        $"group rollback for {failedMember} left this member installed ({removalReason})"));
+                    continue;
+                }
+                status.Replace(member.ToString(), new PatchStatusEntry(
+                    member.ToString(), true, PatchResult.SkippedGroupIncomplete,
+                    $"withdrawn because {failedMember} could not be installed: {failedReason}"));
+            }
+
+            // Members that were never reached at all are reported too, so the log accounts for every
+            // patch the switch controls instead of going quiet after the failure.
+            for (int i = 0; i < group.Count; i++)
+            {
+                PatchId member = group[i];
+                if (member == failedMember || IsInstalled(member))
+                    continue;
+                if (FindReason(status, member.ToString()) != null)
+                    continue;
+                status.Add(new PatchStatusEntry(
+                    member.ToString(), true, PatchResult.SkippedGroupIncomplete,
+                    $"not attempted because {failedMember} could not be installed: {failedReason}"));
+            }
+        }
+
+        private static string FindReason(PatchStatus status, string name)
+        {
+            for (int i = status.Entries.Count - 1; i >= 0; i--)
+            {
+                if (string.Equals(status.Entries[i].Name, name, StringComparison.Ordinal))
+                    return status.Entries[i].Reason;
+            }
+            return null;
         }
 
         /// <summary>
@@ -115,9 +287,27 @@ namespace PeakSafeOptimizer.Infrastructure
             string name = id.ToString();
             if (_installed.TryGetValue(id, out InstalledPatch existing))
             {
-                status.Add(new PatchStatusEntry(
-                    name, true, PatchResult.SkippedAlreadyInstalled, "already installed", existing.Compatibility));
-                return;
+                if (!existing.ResetPending)
+                {
+                    status.Add(new PatchStatusEntry(
+                        name, true, PatchResult.SkippedAlreadyInstalled, "already installed", existing.Compatibility));
+                    return;
+                }
+
+                // Detached but not proven clean. Retry the Reset before reinstalling; if it throws
+                // again the record stays and the patch stays out, rather than being installed on top
+                // of state the previous instance may still own.
+                try
+                {
+                    existing.Reset?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Fail(status, name, existing.Compatibility, PatchResult.FailedInitialize, "Reset retry", ex);
+                    return;
+                }
+                _installed.Remove(id);
+                _log?.LogInfo($"{name} pending reset succeeded on retry; reinstalling.");
             }
             if (_factories == null || !_factories.TryGetValue(id, out Func<PatchDefinition> factory) || factory == null)
             {
@@ -342,7 +532,10 @@ namespace PeakSafeOptimizer.Infrastructure
                     _log?.LogError($"{name} reset failed safely after uninstall: {ex.GetType().Name}: {ex.Message}");
                     // All Harmony methods are detached, but static state was not proven clean. Keep
                     // the record so a later shutdown/retry can run Reset again instead of reporting
-                    // a successful uninstall with stale accessors.
+                    // a successful uninstall with stale accessors. ResetPending marks it as not live,
+                    // so IsInstalled reports false and a re-enable retries Reset and reinstalls
+                    // instead of seeing "already installed" and silently doing nothing.
+                    installed.ResetPending = true;
                     status.Add(new PatchStatusEntry(name, false, PatchResult.FailedUninstall,
                         $"Harmony methods detached but reset failed ({ex.GetType().Name}: {ex.Message})",
                         installed.Compatibility));

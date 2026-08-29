@@ -15,14 +15,18 @@ namespace PeakSafeOptimizer.Graphics
     /// to whoever installed the mod.
     ///
     /// The write is one-directional. A value already at or below the cap is left alone, so the worst
-    /// case is no effect rather than a regression. The value seen at startup is captured once and
-    /// written back when the lane is switched off or the plugin shuts down, and only if the current
-    /// value is still the one this lane wrote - anything else is the game's or the player's newer
-    /// value.
+    /// case is no effect rather than a regression. The value in force when the lane turns on is
+    /// captured on that rising edge and written back when the lane is switched off or the plugin
+    /// shuts down, and only if the current value is still the one this lane wrote - anything else is
+    /// the game's or the player's newer value. Switching the lane off drops the snapshot, so a player
+    /// who changes graphics quality while the lane is off is not sent back to an older value when it
+    /// is turned on again.
     ///
-    /// There is no game code to fight here (no per-frame writer of skinWeights exists), but the
-    /// periodic reassert is kept because the quality-level machinery can reset QualitySettings
-    /// wholesale.
+    /// There is no game code to fight over this particular setting (nothing in Assembly-CSharp writes
+    /// skinWeights; it only writes vSyncCount, globalTextureMipmapLimit, lodBias and pixelLightCount),
+    /// but QualitySettings does have per-frame writers - URP rewrites antiAliasing from the pipeline
+    /// asset every frame (UniversalRenderPipeline.cs:321-323) - so the periodic reassert is kept
+    /// against the quality-level machinery resetting QualitySettings wholesale.
     /// </summary>
     internal sealed class BoneWeightCap
     {
@@ -39,7 +43,9 @@ namespace PeakSafeOptimizer.Graphics
         /// Grace period before the first apply. The game's own graphics settings are applied once from
         /// SettingsHandler's constructor (GameHandler.cs:154 -> SettingsHandler.cs:71-76). Snapshotting
         /// before that could capture a value the player never chose, and the restore would then put
-        /// that back instead.
+        /// that back instead. It only constrains when the first apply may happen; every later
+        /// off-&gt;on transition re-samples immediately, since by then the game has long since written
+        /// its own value.
         /// </summary>
         private const float StartupGrace = 5f;
 
@@ -53,6 +59,8 @@ namespace PeakSafeOptimizer.Graphics
         private SkinWeights _snapshot;
         private bool _wrote;
         private SkinWeights _wroteValue;
+        /// <summary>Only affects log wording: the first snapshot is the launch value, later ones are not.</summary>
+        private bool _sampledBefore;
 
         internal BoneWeightCap(ManualLogSource log)
         {
@@ -91,6 +99,11 @@ namespace PeakSafeOptimizer.Graphics
                 Restore("shutdown");
         }
 
+        /// <summary>
+        /// Samples on the rising edge and reasserts afterwards. <see cref="_hasSnapshot"/> is the
+        /// edge detector: <see cref="Restore"/> clears it, so a re-enable snapshots the value that is
+        /// current then, while the 2 s reassert path finds it set and leaves the snapshot alone.
+        /// </summary>
         private void Apply()
         {
             try
@@ -99,10 +112,14 @@ namespace PeakSafeOptimizer.Graphics
                 {
                     _snapshot = QualitySettings.skinWeights;
                     _hasSnapshot = true;
-                    _log?.LogInfo($"PeakSafeOptimizer | bone weight cap: launch value was {_snapshot}.");
+                    _log?.LogInfo(_sampledBefore
+                        ? $"PeakSafeOptimizer | bone weight cap: value on re-enable was {_snapshot}."
+                        : $"PeakSafeOptimizer | bone weight cap: launch value was {_snapshot}.");
+                    _sampledBefore = true;
                 }
 
-                // Cost order is the enum's numeric order (SkinWeights.cs:3-10).
+                // Cost order is the enum's numeric order
+                // (SkinWeights.cs:3-10: None=0, OneBone=1, TwoBones=2, FourBones=4, Unlimited=255).
                 if ((int)QualitySettings.skinWeights > (int)Cap)
                 {
                     QualitySettings.skinWeights = Cap;
@@ -117,6 +134,10 @@ namespace PeakSafeOptimizer.Graphics
             }
         }
 
+        /// <summary>
+        /// Falling edge: undo this lane's own write if it is still the live value, then drop the
+        /// snapshot so it cannot be written back long after the player has moved on from it.
+        /// </summary>
         private void Restore(string reason)
         {
             _applied = false;
@@ -125,9 +146,24 @@ namespace PeakSafeOptimizer.Graphics
             try
             {
                 if (_wrote && QualitySettings.skinWeights == _wroteValue)
+                {
                     QualitySettings.skinWeights = _snapshot;
+                    _log?.LogInfo($"PeakSafeOptimizer | bone weight cap restored {_snapshot} ({reason}).");
+                }
+                else if (_wrote)
+                {
+                    _log?.LogInfo(
+                        "PeakSafeOptimizer | bone weight cap left skinWeights as is " +
+                        $"({reason}); {QualitySettings.skinWeights} is not the value this lane wrote.");
+                }
+                else
+                {
+                    _log?.LogInfo(
+                        "PeakSafeOptimizer | bone weight cap had nothing to restore " +
+                        $"({reason}); skinWeights was already at or below the cap.");
+                }
                 _wrote = false;
-                _log?.LogInfo($"PeakSafeOptimizer | bone weight cap restored {_snapshot} ({reason}).");
+                _hasSnapshot = false;
             }
             catch (Exception ex)
             {
