@@ -61,6 +61,18 @@ correctness, blast-radius and honesty repairs.
   `GenericOptimizer` instances override the range with a finite value (82m or 60m); the
   `float.PositiveInfinity` in the class is only the field default, and serialized values win.
 
+### Declared, not changed
+
+- `TumbleWeedTargetScan` is now written down as the second declared exception to the default-on rule,
+  alongside `ExplosionScale`. It has shipped on by default since 1.0.0 while not being behaviourally
+  equivalent, and that was never said out loud. What it gives up, exactly: the target solve runs once
+  every 5 physics ticks (0.1s) instead of every tick, so a newly appearing closer or better-angled
+  character is adopted up to 0.1s late. The force is still applied every tick, and its direction is
+  recomputed from the cached target's current centre, so the lag only affects *which* character is
+  chased, never the tracking of the one already chosen; a target that died or was destroyed forces an
+  immediate rescan. Exposure is narrow - tumbleweeds only exist in the desert / mesa biome. The switch
+  stays on by default, because that is the map the framerate complaint came from. No code changed.
+
 ### Correctness
 
 - `StatusEmitterScan` restored vanilla's ordering in the warning-end branch. It cleared the
@@ -114,6 +126,18 @@ correctness, blast-radius and honesty repairs.
   clause, and it now reproduces vanilla's short-circuit before checking anything behind it, so a
   non-Mesa or night-time frame no longer books repair reasons vanilla never earned. Those counters
   are quoted as evidence of vanilla defects, so a false positive costs more than the branch.
+
+### Documentation corrections
+
+- `CharacterMovement.OnCollision` reads the allocating `Collision.contacts` property **six** times, not
+  seven: `CharacterMovement.cs:928`, `:948`, `:953` twice and `:955` twice. The docs and the patch's own
+  comment had claimed seven since 1.0.0. The patch itself is unchanged - it still reads `GetContact(0)`
+  once - only the count quoted for the vanilla method was wrong.
+- `IKItemGuard` now books its repair reason separately for a missing right-hand node and a missing
+  left-hand node, so the log says which side is absent instead of only that one of them is.
+- `WeightRefreshCoalescing` no longer books a diagnostic reason on its success path. Booking one there
+  broke the project rule that repair counters only ever record repairs and fallbacks, which is what
+  makes a non-zero counter evidence of a defect.
 
 None of the above is verified in game yet. See TESTING.md.
 

@@ -34,12 +34,48 @@ namespace PeakSafeOptimizer.Patches.Stability
     /// (CharacterRopeHandling.cs:115) and in that branch only calls StopAnyClimbing for the local
     /// owner. This patch extends the same "inputs unusable" early-exit with the empty/unavailable
     /// segment list case and skips the frame instead. It never reproduces the original body.
-    /// Skipping is state-safe: the two writes in the else branch are
-    /// ropeClimbWorldNormal = ropeClimbNormal (idempotent copy, recomputed next frame) and
-    /// ropeClimbWorldUp = GetUp(...) (the value that cannot be computed at all this frame), plus an
-    /// AddForce that is a per-frame impulse. No counter, timer or latched flag is advanced here,
-    /// and Update() (which owns ropePercent, stamina and the stop RPCs) is a different method and
-    /// stays untouched.
+    ///
+    /// What skipping costs, argued from the writes themselves (CharacterRopeHandling.cs:124-126):
+    ///
+    ///   * <c>ropeClimbWorldUp = GetUp(...)</c> is the value that cannot be computed at all this
+    ///     frame - that is the whole reason the original raises.
+    ///   * <c>AddForce(ClimbForce())</c> is a per-frame impulse, and ClimbForce itself goes through
+    ///     GetPosition (:137), which would raise on the same empty segment list.
+    ///   * <c>ropeClimbWorldNormal = ropeClimbNormal</c> is NOT an idempotent copy that gets
+    ///     recomputed next frame. <c>ropeClimbNormal</c> has exactly one writer in the whole
+    ///     assembly, the grab RPC at CharacterRopeHandling.cs:158
+    ///     (<c>= -character.data.lookDirection_Flat</c>), so it is constant for the entire climb;
+    ///     the copy at :124 only has an effect the first time Climbing() executes successfully during
+    ///     that climb. If the segment list is empty from the moment of the grab - precisely the
+    ///     just-joined remote client this patch exists for - <c>ropeClimbWorldNormal</c> retains the
+    ///     residue of the previous climb, or <c>Vector3.zero</c> on the first climb of the session.
+    ///
+    /// Skipping is nevertheless the right call, for two reasons that do not depend on that copy:
+    ///   1. The only surviving consumer of <c>ropeClimbWorldNormal</c> outside the skipped method is
+    ///      Character.SetRotation (Character.cs:1527-1545), whose rope branch is
+    ///      <c>Quaternion.LookRotation(-data.ropeClimbWorldNormal, data.ropeClimbWorldUp)</c> at
+    ///      :1535. That call is reached from CharacterRagdoll.RotateCharacter (CharacterRagdoll.cs:
+    ///      193-197) at the top of CharacterRagdoll.FixedUpdate (:159) and the rotation it writes is
+    ///      restored from <c>rotationBefore</c> by ResetRotation (:199-202) later in the very same
+    ///      physics step (:169). So the stale or zero normal perturbs an intermediate rotation used
+    ///      for animation sampling within one step, not a persisted transform.
+    ///   2. In this state the original is not producing a good rotation either - it is raising
+    ///      ArgumentOutOfRangeException every physics step, so the assignment at :124 never completes
+    ///      in vanilla on these frames either.
+    ///
+    /// The one visible artefact worth naming: with a zero <c>ropeClimbWorldNormal</c>,
+    /// <c>Quaternion.LookRotation</c> returns identity and Unity may emit its
+    /// "Look rotation viewing vector is zero" warning. That is a log line instead of an exception with
+    /// a stack capture, on a frame that is broken in vanilla too.
+    ///
+    /// No counter, timer or latched flag is advanced in the skipped body, and Update() (which owns
+    /// ropePercent, stamina and the stop RPCs) is a different method and stays untouched.
+    ///
+    /// Two of the five diagnostics are fallbacks rather than repairs, and both are unreachable in
+    /// vanilla: <c>accessors-unavailable</c> and <c>character-unavailable</c> both return true, and
+    /// FixedUpdate has already dereferenced the same <c>character.data</c> chain before it calls
+    /// Climbing() (CharacterRopeHandling.cs:101-106), so a null character or data cannot get this far
+    /// unless a third party calls Climbing() directly.
     /// </summary>
     internal static class RopeSegmentGuardPatch
     {

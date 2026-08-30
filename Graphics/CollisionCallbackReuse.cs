@@ -41,6 +41,18 @@ namespace PeakSafeOptimizer
     ///     and CharacterMovement.OnCollision is on the bodypart path, so a ragdoll pile touching
     ///     terrain still allocates one array per such contact. The saving is the Collision object on
     ///     every reported contact plus the array on every contact nobody inspects.
+    ///
+    /// One consequence of the flag being a bool deserves spelling out, because it looks like a bug and
+    /// is not. The lane cannot tell its own true from another mod's true, so "is this still my write?"
+    /// is answered by comparing against <c>true</c>. If another mod sets the flag back to false while
+    /// this lane holds it, the next <see cref="SuspendForPatchChange"/> or <see cref="Shutdown"/> sees
+    /// false, takes the "not the value this lane wrote" branch, and drops the snapshot anyway - and
+    /// then the following <see cref="Evaluate"/> re-samples (getting that mod's false as the new
+    /// original) and writes true again. Net effect: on every patch toggle this lane wins, and the
+    /// other mod's false survives only until the next toggle. That is the price of a shared bool with
+    /// no ownership token; the alternative - refusing to re-apply after someone else cleared the flag -
+    /// would let any mod silently disable this lane for the rest of the session. The restore direction
+    /// stays conservative either way: this lane never writes false over someone else's true.
     /// </summary>
     internal sealed class CollisionCallbackReuse
     {
@@ -139,6 +151,16 @@ namespace PeakSafeOptimizer
                 Restore("patch set changing");
         }
 
+        /// <summary>
+        /// Undoes this lane's own write. Deliberately asymmetric with BoneWeightCap.Restore, which
+        /// clears its state in a finally: there <c>_hasSnapshot</c> doubles as the rising-edge detector
+        /// for a periodic reassert, so a throwing write-back that skipped the teardown would poison the
+        /// next enable. Here the rising edge in <see cref="Evaluate"/> re-samples
+        /// <c>_originalValue</c> unconditionally (:108-109) and <c>_hasOriginalValue</c> is only ever read
+        /// as a "nothing to undo" short-circuit, so leaving it set after a failed write-back costs
+        /// nothing - the next enable overwrites it regardless. No finally is added, to keep the teardown
+        /// on the path that actually logged what it did.
+        /// </summary>
         private void Restore(string reason)
         {
             _applied = false;

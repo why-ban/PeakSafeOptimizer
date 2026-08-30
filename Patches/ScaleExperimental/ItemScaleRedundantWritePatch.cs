@@ -26,6 +26,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///   - the localScale currently present on those transforms (covers external writers)
     /// Anything else, including the first sight of an instance or any unprovable dependency,
     /// returns true so the original method runs unchanged.
+    ///
+    /// Cost of the signature itself, since it is paid every frame by every ground item: two
+    /// GetInstanceID calls, two localScale reads and one ConditionalWeakTable lookup, against the one
+    /// or two localScale *writes* it removes. Writes dirty the transform hierarchy and reads do not,
+    /// which is why the trade is taken. Two things that used to be on top of that are gone: the
+    /// presence of a secondary target is now answered by the routing flag instead of by three
+    /// UnityEngine.Object alive tests (see the Prefix), and the table is probed with TryGetValue before
+    /// GetOrCreateValue so the steady-state path does not re-enter the table's lock.
     /// </summary>
     internal static class ItemScaleRedundantWritePatch
     {
@@ -195,14 +203,28 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
+            // `applyDirectly` stands in for `secondary != null` from here on, which removes three
+            // UnityEngine.Object.op_Inequality calls per frame per syncer. The substitution is exact by
+            // construction: the direct branch above only reaches this point after proving secondary is
+            // Unity-non-null, and the indirect branch assigns the literal null. Nothing in between can
+            // change either, since this Prefix performs no writes at all.
+            bool hasSecondary = applyDirectly;
+
             int currentBits = BitConverter.SingleToInt32Bits(currentScale);
             int previousBits = BitConverter.SingleToInt32Bits(previousScale);
             int primaryId = primary.GetInstanceID();
-            int secondaryId = secondary != null ? secondary.GetInstanceID() : 0;
+            int secondaryId = hasSecondary ? secondary.GetInstanceID() : 0;
             Vector3 primaryScale = primary.localScale;
-            Vector3 secondaryScale = secondary != null ? secondary.localScale : Vector3.zero;
+            Vector3 secondaryScale = hasSecondary ? secondary.localScale : Vector3.zero;
 
-            State state = states.GetOrCreateValue(__instance);
+            // TryGetValue before GetOrCreateValue, matching the other lanes. Both take the same
+            // ConditionalWeakTable lock and GetValue calls TryGetValue inside it
+            // (mscorlib ConditionalWeakTable.cs:405-437, :461-477), so this saves one uncontended
+            // recursive Monitor entry on the steady-state path rather than a whole lock - but the
+            // steady state is every frame of every ground item, and the shape is what the rest of the
+            // plugin uses.
+            if (!states.TryGetValue(__instance, out State state))
+                state = states.GetOrCreateValue(__instance);
             if (state.HasApplied &&
                 state.CurrentScaleBits == currentBits &&
                 state.PreviousScaleBits == previousBits &&
@@ -230,11 +252,26 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             float applied = itemState == (int)ItemState.InBackpack ? currentScale * 0.5f : currentScale;
             Vector3 appliedScale = applied * Vector3.one;
             state.PrimaryLocalScale = appliedScale;
-            state.SecondaryLocalScale = secondary != null ? appliedScale : Vector3.zero;
+            state.SecondaryLocalScale = hasSecondary ? appliedScale : Vector3.zero;
             state.HasApplied = true;
             return true;
         }
 
+        /// <summary>
+        /// Records the inputs of a frame this patch is *not* allowed to skip, so the next frame
+        /// compares against them rather than against a stale signature.
+        ///
+        /// The two Unity alive tests this used to perform on <paramref name="primary"/> and
+        /// <paramref name="secondary"/> are gone, because both are statically decided at the one call
+        /// site: primary is proven Unity-non-null by the routing block above, and secondary is proven
+        /// non-null when <paramref name="applyDirectly"/> is true and is the literal null when it is
+        /// false. The routing flag therefore answers "is there a secondary" without a native call.
+        ///
+        /// The table is probed with TryGetValue first for the same reason as in the Prefix: GetValue
+        /// takes the table lock and then calls TryGetValue inside it (mscorlib
+        /// ConditionalWeakTable.cs:405-437, :461-477), so a hit is one uncontended Monitor entry rather
+        /// than two.
+        /// </summary>
         private static void InvalidateAndRecord(
             ConditionalWeakTable<ItemScaleSyncer, State> states,
             ItemScaleSyncer instance,
@@ -247,15 +284,16 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             Transform secondary,
             bool recordApplied)
         {
-            State state = states.GetOrCreateValue(instance);
+            if (!states.TryGetValue(instance, out State state))
+                state = states.GetOrCreateValue(instance);
             state.HasApplied = recordApplied;
             state.CurrentScaleBits = BitConverter.SingleToInt32Bits(currentScale);
             state.PreviousScaleBits = BitConverter.SingleToInt32Bits(previousScale);
             state.ItemState = itemState;
             state.ApplyDirectly = applyDirectly;
             state.IsMine = isMine;
-            state.PrimaryTransformId = primary != null ? primary.GetInstanceID() : 0;
-            state.SecondaryTransformId = secondary != null ? secondary.GetInstanceID() : 0;
+            state.PrimaryTransformId = primary.GetInstanceID();
+            state.SecondaryTransformId = applyDirectly ? secondary.GetInstanceID() : 0;
             state.PrimaryLocalScale = Vector3.zero;
             state.SecondaryLocalScale = Vector3.zero;
         }

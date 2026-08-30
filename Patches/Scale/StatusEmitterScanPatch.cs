@@ -126,6 +126,20 @@ namespace PeakSafeOptimizer.Patches.Scale
                 },
                 requirePublic: true);
 
+            // The warning overlay. ResolveWarning reads GUIManager.instance (GUIManager.cs:19) and
+            // GUIManager.sporesWarning (GUIManager.cs:189), and the two overlay calls are
+            // ScreenVFX.EndFX (ScreenVFX.cs:90) and ScreenVFX.StartFX (ScreenVFX.cs:70); vanilla
+            // reaches all four through GUIManager.instance.sporesWarning.EndFX/StartFX
+            // (StatusEmitter.cs:68 and :75). None of them was asserted before, which left the
+            // replacement's only external call surface outside the fail-closed contract.
+            ScaleValidation.RequireStaticField(typeof(GUIManager), "instance", typeof(GUIManager));
+            ScaleValidation.RequireInstanceField(typeof(GUIManager), "sporesWarning", typeof(ScreenVFX));
+            ScaleValidation.RequireInstanceMethod(
+                typeof(ScreenVFX), "EndFX", typeof(void), Type.EmptyTypes, requirePublic: true);
+            MethodInfo startFx = ScaleValidation.RequireInstanceMethod(
+                typeof(ScreenVFX), "StartFX", typeof(void), new[] { typeof(float) }, requirePublic: true);
+            RequireStartFxPhotosensitiveDefault(startFx);
+
             AccessTools.FieldRef<StatusEmitter, float> tickRef =
                 AccessTools.FieldRefAccess<StatusEmitter, float>(timeSinceLastTick);
             AccessTools.FieldRef<StatusEmitter, float> tickTimeRef =
@@ -469,6 +483,35 @@ namespace PeakSafeOptimizer.Patches.Scale
         {
             GUIManager gui = GUIManager.instance;
             return gui != null ? gui.sporesWarning : null;
+        }
+
+        /// <summary>
+        /// StartFX's parameter is optional (ScreenVFX.cs:70, <c>float photosensitive = 0.5f</c>) and
+        /// TryStartWarning calls it as <c>warning.StartFX()</c>, so the 0.5f is baked into this
+        /// plugin's own IL at compile time. A signature assertion cannot see that: if the game ever
+        /// changes the default, StartFX still has the exact same name, staticness, return type and
+        /// parameter type, so every other check here keeps passing while vanilla passes the new value
+        /// and this patch keeps passing 0.5f - a silent behaviour divergence in the photosensitivity
+        /// path. Hence this extra check, which asserts the constant this assembly compiled against.
+        ///
+        /// The comparison unboxes through a type pattern rather than Equals or Convert: DefaultValue
+        /// is typed object, and a retyped parameter would box something that is not a float, which
+        /// the pattern rejects instead of throwing or coercing. 0.5f is exactly representable, so the
+        /// float equality is exact.
+        /// </summary>
+        private static void RequireStartFxPhotosensitiveDefault(MethodInfo startFx)
+        {
+            ParameterInfo[] parameters = startFx.GetParameters();
+            if (parameters.Length != 1)
+                throw new InvalidOperationException("ScreenVFX.StartFX parameter count changed");
+            ParameterInfo photosensitive = parameters[0];
+            if (!photosensitive.IsOptional || !photosensitive.HasDefaultValue ||
+                !(photosensitive.DefaultValue is float defaultValue) || defaultValue != 0.5f)
+            {
+                throw new InvalidOperationException(
+                    "ScreenVFX.StartFX no longer defaults photosensitive to 0.5f; the value this " +
+                    "patch compiled into its own call site would diverge from vanilla");
+            }
         }
 
         /// <summary>

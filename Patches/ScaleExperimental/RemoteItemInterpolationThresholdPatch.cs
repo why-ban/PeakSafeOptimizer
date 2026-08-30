@@ -33,6 +33,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// lastRecievedPosition to the same interpolated value, so interpolation phase and the inspector
     /// field never drift. ShouldSendData, GetDataToWrite, OnDataReceived, forceSyncFrames, shouldSync
     /// and kinematic state are never touched.
+    ///
+    /// Cost of the deferring case: this is a filter, so every item it hands back pays the gates twice
+    /// - once here, once in the original. The gate chain is therefore ordered cheapest-first rather
+    /// than in the audited order, which is sound because all of the gates are pure reads and the
+    /// verdict is their conjunction. The four managed gates (InRoom, shouldSync, the two Optionable
+    /// flags) now reject a non-interpolating item before any UnityEngine.Object alive test or
+    /// Rigidbody getter runs, so single player, a non-syncing item and an item with no packet yet cost
+    /// no native calls at all. See the Prefix for the per-gate reasoning.
     /// </summary>
     internal static class RemoteItemInterpolationThresholdPatch
     {
@@ -95,6 +103,16 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceProperty(typeof(Item), "itemState", typeof(ItemState));
             if (!Enum.IsDefined(typeof(ItemState), ItemState.Ground))
                 throw new InvalidOperationException("ItemState.Ground is no longer defined");
+
+            // The three gates the Prefix now evaluates before it touches any native member. Asserted
+            // so the cost-ordered gate chain fails closed if any of them is reshaped: InRoom is a
+            // ClientState comparison (PhotonNetwork.cs:697), SerializationRate an integer division over
+            // a private int (PhotonNetwork.cs:588-593, :139) and IsMine an auto-property backed by a
+            // plain field (PhotonView.cs:132) - all managed, which is what puts them first.
+            ScaleValidation.RequireStaticProperty(typeof(PhotonNetwork), "InRoom", typeof(bool));
+            ScaleValidation.RequireStaticProperty(typeof(PhotonNetwork), "SerializationRate", typeof(int));
+            ScaleValidation.RequireInstanceProperty(typeof(PhotonView), "IsMine", typeof(bool));
+
             FieldInfo dataPositionField = ScaleValidation.RequireInstanceFieldByTypeName(
                 typeof(ItemPhysicsSyncData), "position", "Unity.Mathematics.float3");
             FieldInfo dataRotationField = ScaleValidation.RequireInstanceField(
@@ -221,13 +239,24 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (debugRef(__instance))
                 return true;
 
-            Item item = itemRef(__instance);
-            PhotonView view = viewRef(__instance);
-            if (item == null || view == null)
-                return true;
-
-            UnityEngine.Object rig = rigRef(item);
-            if (rig == null || !PhotonNetwork.InRoom || view.IsMine)
+            // Gate order: every predicate below is a pure read with no side effect, and every one of
+            // them that fails makes this Prefix defer, so the verdict is a conjunction and reordering
+            // the terms cannot change it. They are therefore sorted by cost rather than by the order
+            // the audited method happens to test them in (ItemPhysicsSyncer.cs:44-98).
+            //
+            // The managed reads come first. PhotonNetwork.InRoom is
+            // NetworkClientState == ClientState.Joined (PhotonNetwork.cs:697, :379-397), shouldSync and
+            // the two Optionable flags are plain fields (ItemPhysicsSyncer.cs:17, :12, Optionable.cs:
+            // 19-21), and SerializationRate is an integer division (PhotonNetwork.cs:588-593). None of
+            // them touches native code.
+            //
+            // The native reads come last: `item == null`, `view == null` and `rig == null` each enter
+            // UnityEngine.Object.CompareBaseObjects -> IsNativeObjectAlive (Object.cs:130-160), and
+            // Rigidbody position/rotation are injected native getters. Previously the rig field plus
+            // its alive test ran before all four managed gates, so an item that was never going to be
+            // interpolated at all - single player, a non-syncing item, one with no packet yet - paid
+            // three native calls for nothing and then had the original repeat them.
+            if (!PhotonNetwork.InRoom)
                 return true;
 
             if (!shouldSyncRef(__instance))
@@ -237,15 +266,29 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (remote.IsNone)
                 return true;
 
-            if (item.itemState != ItemState.Ground)
-                return true;
-
             Optionable<Vector3> lastPos = lastPosRef(__instance);
             if (lastPos.IsNone)
                 return true;
 
             int serializationRate = PhotonNetwork.SerializationRate;
             if (serializationRate <= 0)
+                return true;
+
+            Item item = itemRef(__instance);
+            PhotonView view = viewRef(__instance);
+            if (item == null || view == null)
+                return true;
+
+            // Auto-property backed by a plain field (PhotonView.cs:132), so this is a managed read
+            // that only needs the view to exist; it is placed right after that check for that reason.
+            if (view.IsMine)
+                return true;
+
+            if (item.itemState != ItemState.Ground)
+                return true;
+
+            UnityEngine.Object rig = rigRef(item);
+            if (rig == null)
                 return true;
 
             // Reproduce the audited interpolation inputs exactly (ItemPhysicsSyncer.cs:79-87),

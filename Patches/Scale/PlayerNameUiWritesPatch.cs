@@ -2,7 +2,6 @@ using System;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
-using HarmonyLib;
 using Peak.Network;
 using PeakSafeOptimizer.Diagnostics;
 using Photon.Pun;
@@ -17,6 +16,13 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// written when their target differs. Host ownership is read once on the visible non-muted path.
     /// Per-instance state is a ConditionalWeakTable whose value never references its UIPlayerNames
     /// key; it tracks the last sprite written per PlayerName slot.
+    ///
+    /// Every game member is also resolved exactly once per call. The audited method indexes
+    /// <c>playerNameText[index]</c> about twenty times and re-reads <c>gameObject</c>,
+    /// <c>characterInteractable</c>, <c>MainCamera.instance.cam</c> and <c>group.alpha</c> along the
+    /// way; <c>gameObject</c> and <c>alpha</c> are native accessors (Component.cs:46-58,
+    /// CanvasGroup.cs:12-22), so the duplicates are real native calls rather than field loads. The
+    /// Prefix hoists each of them into a local and argues the reuse case by case at the point of use.
     /// </summary>
     internal static class PlayerNameUiWritesPatch
     {
@@ -257,16 +263,63 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             PlayerName name = names[index];
             MainCamera mainCamera = MainCamera.instance;
-            if (name == null || mainCamera == null || getCamera(mainCamera) == null ||
-                getGroup(name) == null || getImage(name) == null || name.hostStar == null ||
-                name.characterInteractable == null || name.characterInteractable.character == null ||
-                local.data == null || local.refs == null || local.refs.afflictions == null)
+            if (name == null || mainCamera == null)
+                return true;
+
+            // Every game member below is resolved exactly once and reused. All of them are stable for
+            // the duration of this call, which is what makes the reuse bit-identical to the repeated
+            // reads the previous revision performed:
+            //   camera        - MainCamera.cam is written only in MainCamera.Awake (MainCamera.cs:17),
+            //                   and the accessor is a plain Ldfld on that field, so a second read can
+            //                   only return the same reference.
+            //   nameObject    - Component.gameObject is a native FreeFunction (Component.cs:46-58) and
+            //                   was previously called four times per invocation. A component's owning
+            //                   GameObject cannot be reassigned, and nothing this method calls destroys
+            //                   the name widget: the two customization calls only touch the character's
+            //                   own renderers, particle and hat transform (CharacterCustomization.cs:
+            //                   596-618 and :620-642).
+            //   interactable  - PlayerName.characterInteractable is a plain managed field
+            //                   (PlayerName.cs:17) written only by UIPlayerNames.Init
+            //                   (UIPlayerNames.cs:24), which is not on this call path. The Unity alive
+            //                   test vanilla applies to it at UIPlayerNames.cs:49 is preserved below on
+            //                   this same reference, so a widget whose native half dies mid-call is
+            //                   still treated exactly as before.
+            //   other         - CharacterInteractible.character is a plain managed field written only
+            //                   by CharacterInteractible.Start (CharacterInteractible.cs:14), which is
+            //                   not on this call path, so the null test and the four later uses share
+            //                   one read.
+            //   localData / localRefs / localAfflictions / otherRefs / otherCustomization
+            //                 - plain managed fields (Character.cs:119-123 and :18-58) written only by
+            //                   Character.InitializeRefs (Character.cs:350-395), which is not reachable
+            //                   from here.
+            //
+            // The guard is split across three blocks rather than being one long disjunction. That is
+            // deliberate: a chained `interactable == null || interactable.character == null` would read
+            // the field twice and alive-test twice, which is one native test more than vanilla pays at
+            // UIPlayerNames.cs:49, so each Unity-typed reference is hoisted before it is tested. The
+            // set of conditions and the verdict are unchanged - all of them are pure reads and every
+            // one of them defers - so their order carries no meaning.
+            UnityEngine.Object camera = getCamera(mainCamera);
+            CharacterInteractible interactable = name.characterInteractable;
+            Character.CharacterRefs localRefs = local.refs;
+            if (camera == null || getGroup(name) == null || getImage(name) == null ||
+                name.hostStar == null || interactable == null || localRefs == null)
             {
                 return true;
             }
 
-            Character other = name.characterInteractable.character;
-            if (other.data == null || other.refs == null || other.refs.customization == null)
+            Character other = interactable.character;
+            CharacterData localData = local.data;
+            CharacterAfflictions localAfflictions = localRefs.afflictions;
+            if (other == null || localData == null || localAfflictions == null)
+                return true;
+
+            Character.CharacterRefs otherRefs = other.refs;
+            if (otherRefs == null)
+                return true;
+
+            CharacterCustomization otherCustomization = otherRefs.customization;
+            if (other.data == null || otherCustomization == null)
                 return true;
 
             Sprite[] audioSprites = __instance.audioSprites;
@@ -279,6 +332,16 @@ namespace PeakSafeOptimizer.Patches.Scale
                 // The audited original reads the Photon owner and audio level after its first UI
                 // writes. Any exception in that chain must reproduce through the untouched original,
                 // so it is caught here and handed back before this patch writes anything.
+                //
+                // Why this catch is believed unreachable in practice, while still being kept: the
+                // chain is Character.player (a PlayerHandler dictionary lookup, Character.cs:201) into
+                // NetworkingUtilities.GetUserId, which dereferences photonView.Owner.UserId. Owner is
+                // only ever null when PhotonNetwork.CurrentRoom is null (PhotonView.cs:157), i.e.
+                // outside a room - and UpdateName is only reached from IsLookedAt.Update
+                // (IsLookedAt.cs:44), whose component disables itself on the local character
+                // (IsLookedAt.cs:22-26) and whose Start already required GUIManager.instance. That is
+                // an argument about which scenes reach here, not a proof, so the catch stays and the
+                // diagnostic stays with it. It has never been observed in the shipped logs.
                 try
                 {
                     otherPlayer = other.player;
@@ -307,17 +370,37 @@ namespace PeakSafeOptimizer.Patches.Scale
                 }
             }
 
-            name.transform.position = worldToScreen(getCamera(mainCamera), position);
+            name.transform.position = worldToScreen(camera, position);
+            // Resolved after the last deferral so a handed-back call pays nothing for it, and before
+            // both branches because each of them reads it at least once.
+            GameObject nameObject = name.gameObject;
+            // GameObject.activeSelf is a native property, and both the visible and the invisible branch
+            // read it before the shared tail reads it again. It is tracked in a local instead, updated
+            // in lockstep with every SetActive this method performs, so exactly one native read happens
+            // per invocation where the previous revision did two.
+            //
+            // Nothing else between here and the tail can move it. BecomeChicken/BecomeHuman touch the
+            // character's own renderers, chicken particle and hat transform only
+            // (CharacterCustomization.cs:596-618, :620-642); SetSpriteIfChanged writes Image.sprite;
+            // audioImageTimeout is a plain field (PlayerName.cs:15); and the hostStar SetActive below
+            // is a different GameObject, whose own active flag cannot alter this one's.
+            bool nameActive = nameObject.activeSelf;
 
             if (visible)
             {
                 if (canCannibalize(__instance, other))
-                    other.refs.customization.BecomeChicken();
+                    otherCustomization.BecomeChicken();
 
-                SetActiveIfChanged(name.gameObject, true);
+                // Vanilla calls SetActive(true) unconditionally (UIPlayerNames.cs:47); the read that
+                // makes it conditional is the one folded into nameActive above.
+                if (!nameActive)
+                {
+                    nameObject.SetActive(true);
+                    nameActive = true;
+                }
                 MoveAlpha(name, 1f, getAlpha, setAlpha);
 
-                if (name.characterInteractable && isMuted)
+                if (interactable && isMuted)
                 {
                     SetSpriteIfChanged(__instance, name, index, __instance.mutedAudioSprite,
                         states, getSprite, setSprite);
@@ -346,33 +429,56 @@ namespace PeakSafeOptimizer.Patches.Scale
             }
             else
             {
-                MoveAlpha(name, 0f, getAlpha, setAlpha);
-                if (getAlpha(name) < 0.01f && name.gameObject.activeSelf)
+                // MoveAlpha reports the value it left in CanvasGroup.alpha, which removes the second
+                // native get_alpha (CanvasGroup.cs:12-22) this branch used to perform. It is not a
+                // merge of two reads into one: vanilla writes alpha and then reads it back
+                // (UIPlayerNames.cs:71-72), so the value tested here must be the post-write one. See
+                // MoveAlpha for why its return value is exactly what the field holds afterwards.
+                float alpha = MoveAlpha(name, 0f, getAlpha, setAlpha);
+                if (alpha < 0.01f && nameActive)
                 {
-                    other.refs.customization.BecomeHuman();
-                    SetActiveIfChanged(name.gameObject, false);
+                    otherCustomization.BecomeHuman();
+                    nameObject.SetActive(false);
+                    nameActive = false;
                 }
             }
 
-            if ((local.data.fullyPassedOut ||
-                 local.refs.afflictions.GetCurrentStatus(CharacterAfflictions.STATUSTYPE.Hunger) <
-                 UIPlayerNames.CANNIBAL_HUNGER_THRESHOLD) && name.gameObject.activeSelf)
+            if ((localData.fullyPassedOut ||
+                 localAfflictions.GetCurrentStatus(CharacterAfflictions.STATUSTYPE.Hunger) <
+                 UIPlayerNames.CANNIBAL_HUNGER_THRESHOLD) && nameActive)
             {
-                other.refs.customization.BecomeHuman();
+                otherCustomization.BecomeHuman();
             }
 
             return false;
         }
 
-        private static void MoveAlpha(
+        /// <summary>
+        /// Vanilla's alpha step (UIPlayerNames.cs:48 and :71) with the write skipped when it would not
+        /// move the value, and returning whatever CanvasGroup.alpha holds when it returns.
+        ///
+        /// The returned value is exactly the field contents, in both branches: when the write is taken
+        /// it is the value just written, and when it is skipped the field still holds
+        /// <c>current</c>. Nothing runs between the write and the caller's use of the result, so the
+        /// caller can test it instead of paying a second native get_alpha (CanvasGroup.cs:12-22).
+        ///
+        /// The skip itself is invisible to the one consumer that reads the value back. Skipping
+        /// requires Mathf.Approximately(current, target), and for the target 0f that leaves a value
+        /// far below the 0.01f threshold the caller compares against - while vanilla, which always
+        /// writes, would have landed on exactly 0f there. Both are below the threshold.
+        /// </summary>
+        private static float MoveAlpha(
             PlayerName name,
             float target,
             Func<PlayerName, float> getAlpha,
             Action<PlayerName, float> setAlpha)
         {
             float current = getAlpha(name);
-            if (!Mathf.Approximately(current, target))
-                setAlpha(name, Mathf.MoveTowards(current, target, Time.deltaTime * 5f));
+            if (Mathf.Approximately(current, target))
+                return current;
+            float next = Mathf.MoveTowards(current, target, Time.deltaTime * 5f);
+            setAlpha(name, next);
+            return next;
         }
 
         private static void SetActiveIfChanged(GameObject gameObject, bool target)

@@ -12,7 +12,7 @@
 
    `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`、`BinocularSunGuard`、`ItemOptimizerDeregisterGuard`、`StatusEmitterScan`（共 38 项）。
 
-   **默认关闭的 6 个补丁 / 4 个开关**：`Experimental.RemoteRagdollLod`（一个开关 = `RemoteRagdollLodPhysics`/`Animate`/`MovementForce`/`Animator` 四个补丁）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`；另有两条非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.CapBoneWeights`（不计入 44 个补丁）。
+   **默认关闭的 6 个补丁 / 3 个开关**：`Experimental.RemoteRagdollLod`（一个开关 = `RemoteRagdollLodPhysics`/`Animate`/`MovementForce`/`Animator` 四个补丁）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`。另有两条默认关闭的非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.CapBoneWeights`，它们不是补丁开关，既不计入 44 个补丁也不计入 40 个开关（所以「3 个开关」只数上面那三个）。
 
 4. 准备一次不装插件的同场景基准（同人数/地点/操作序列）才能判断收益。
 
@@ -66,20 +66,24 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
-### 2.1 稳定性修复（7 项）
+### 2.1 稳定性修复（8 项）
+
+下表 8 行对应 8 个补丁。注意目录归属：其中 7 个实现在 `Patches\Stability`，`StatusEmitterScan`（A8）实现在 `Patches\Scale\StatusEmitterScanPatch.cs`——本节是按「稳定性修复」这个性质分的，不是按目录数的，别去数 `Patches\Stability` 里的文件数来核对。
 
 | 步骤 | 补丁 | 内容 | 通过条件 |
 |---|---|---|---|
 | A1 | `RunBasedValues` | 保存/读取进度 | 无序列化空引用，进度正常 |
 | A2 | `Parachute` | 手持/栏/背包取放降落伞 | 优先级正确、移除不残留、Scoutmaster 不变 |
 | A3 | `RopeSegmentGuard` | 绳索攀爬 | 攀爬手感正常；`ArgumentOutOfRangeException` 不再出现 |
-| A4 | `IKItemGuard` | 装备切换 | 手部不跳变；无 `GetItemPosRight` NRE |
-| A5 | `EmoteWheelGuard` | **本轮重点回归项**：正常开合表情轮；在**已死亡/观战**状态下按住再松开表情键；结算画面（`stats.won`）下同样操作；重生、退出 | 表情轮开合正常，松手后必须**关闭**且光标消失、暂停菜单能打开（1.1.0 在「角色已死 + refs/stats 或 input 缺失」时会把这条关闭分支一起跳过，导致表情轮与光标卡死）。无 `canEmote` NRE。诊断五条 `localCharacter-` / `data-` / `refs-` / `stats-` / `input-unavailable`，记录命中哪一条——新逻辑下 `refs-`/`stats-` 只在角色**存活**时可达，`input-` 只在 `canEmote` 为真时可达 |
-| A6 | `BinocularSunGuard` | 举起望远镜（机场、方山白天、方山夜间、其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就。机场没有 MapHandler，是 1544 次异常最可能的来源，应命中 `mapHandler-unavailable`。**非方山或夜间举镜时，`mainCamera-` / `center-` / `achievementManager-` 三条必须一次都不命中**（原版在那些条件下会提前 return，本轮已把这三项检查移到复现 guard clause 之后，就是为了消除这种假阳性） |
+| A4 | `IKItemGuard` | 装备切换（左右手各持一件、快速来回切换） | 手部不跳变；无 `GetItemPosRight` NRE。诊断按**缺失的是哪一侧手部节点**分别记账，记录命中的是哪一侧 |
+| A5 | `EmoteWheelGuard` | **1.2.0 重点回归项**：正常开合表情轮；在**已死亡/观战**状态下按住再松开表情键；结算画面（`stats.won`）下同样操作；重生、退出 | 表情轮开合正常，松手后必须**关闭**且光标消失、暂停菜单能打开（1.1.0 在「角色已死 + refs/stats 或 input 缺失」时会把这条关闭分支一起跳过，导致表情轮与光标卡死）。无 `canEmote` NRE。诊断五条 `localCharacter-` / `data-` / `refs-` / `stats-` / `input-unavailable`，记录命中哪一条——新逻辑下 `refs-`/`stats-` 只在角色**存活**时可达，`input-` 只在 `canEmote` 为真时可达 |
+| A6 | `BinocularSunGuard` | 举起望远镜（机场、方山白天、方山夜间、其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就。机场没有 MapHandler，是 1544 次异常最可能的来源，应命中 `mapHandler-unavailable`。**非方山或夜间举镜时，`mainCamera-` / `center-` / `achievementManager-` 三条必须一次都不命中**（原版在那些条件下会提前 return，1.2.0 已把这三项检查移到复现 guard clause 之后，就是为了消除这种假阳性） |
 | A7 | `ItemOptimizerDeregisterGuard` | 正常游戏，重点在物品密集生成/销毁时 | 日志不再出现 `ItemOptimizationManager.DeregisterItem` 的 `ArgumentNullException`；物品优化行为无变化 |
-| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处；Roots 风吹过毒气时（`WindAffectedStatusEmitter`）站在范围内；另外在刚重生/刚进图（ragdoll 尚未注册）时站在毒气里 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量，**任何差异都说明等价论证有漏洞**）；进出范围时孢子警告全屏效果照常出现/消失；风吹停毒气时警告也随之消失；重叠区只有最近的那个发出警告；刚重生那一瞬不应出现 `Character.Center` 的 `KeyNotFoundException`（本轮把它从「交回原版再抛一次」改成了真正消除，诊断 `center-unavailable` 可以命中但异常不应出现） |
+| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处；Roots 风吹过毒气时（`WindAffectedStatusEmitter`）站在范围内；另外在刚重生/刚进图（ragdoll 尚未注册）时站在毒气里 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量，**任何差异都说明等价论证有漏洞**）；进出范围时孢子警告全屏效果照常出现/消失；风吹停毒气时警告也随之消失；重叠区只有最近的那个发出警告；刚重生那一瞬不应出现 `Character.Center` 的 `KeyNotFoundException`（1.2.0 把它从「交回原版再抛一次」改成了真正消除，诊断 `center-unavailable` 可以命中但异常不应出现） |
 
-### 2.2 等价改写与规模化（15 项，13 组）
+### 2.2 等价改写与规模化（14 项，12 组）
+
+下表 12 行、共 14 个补丁：B1 含 `Campfire` 与 `CampfireProtectionMerge` 两个，B7 含 `ZombieScanRange` 与 `ZombieSpawnScanRange` 两个，其余每行一个。**编号有跳号：没有 B2**，编号保持原样不重排，因为 `B13` 这类编号在别处（第 7 节验收优先级）被引用。
 
 | 步骤 | 补丁 | 内容 | 通过条件 |
 |---|---|---|---|
@@ -87,7 +91,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | B3 | `HeatEmissionScan` | 取暖 | 范围与速率一致 |
 | B4 | `RagdollPhysicsMats` | 倒地/拖拽/冰面 | 摩擦切换正常，无打滑突变 |
 | B5 | `ItemCollisionMode` | 拾取/丢弃/背包 | 不穿地、碰撞正常 |
-| B6 | `GenericOptimizerRange` | 靠近/远离带优化器物 | 远处脚本/动画启停与原版一致（默认无穷范围预期无可见差异） |
+| B6 | `GenericOptimizerRange` | 靠近/远离带优化器物（弓箭发射器 82m、食人花 60m 两个档位各走一次） | 远处脚本/动画启停距离与原版一致。注意范围**不是**代码里的 `+inf`：全库 2133 个实例都被序列化值覆写为 82m 或 60m，所以这是真实可见的门控距离，进出时机必须与原版逐次一致 |
 | B7 | `ZombieScanRange` / `ZombieSpawnScanRange` | 蘑菇僵尸生成/禁用（主机） | 僵尸启停/生成时机与原版一致 |
 | B8 | `SleepingZombieScan` | 蘑菇僵尸睡眠唤醒 | 唤醒距离/角度与原版一致 |
 | B9 | `WeightRefreshCoalescing` | 连续拾取丢弃触发负重刷新 | 负重/荆棘/箭矢数值与特效次数与原版一致 |
@@ -109,20 +113,24 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | C7 | `AnimatorValuesHash` | **移动动画** | 输入方向、接地、冲刺与垂直速度动画连续，无冲刺参数卡住 |
 | C8 | `PlayerNameUiWrites` | **名字牌状态** | 位置每帧跟随；说话图标、静音、房主星、透明淡出、食人显示状态与原版一致 |
 
-### 2.4 远端与细节物理实验（6 项）
+### 2.4 远端与细节物理实验（9 项，6 组）
+
+下表 6 行、共 9 个补丁：D1 是 `Experimental.RemoteRagdollLod` 一个开关下的 4 个补丁，其余每行一个。**编号有跳号：没有 D2**，同样保持原编号不重排。
 
 | 步骤 | 补丁 | 场景 | 通过条件 |
 |---|---|---|---|
-| D1 | `Experimental.RemoteRagdollLod`（一个开关，四个补丁） | 一名远端玩家从 40 米走到 70 米再返回并切换装备；远端玩家在 70 米外反复蹲下站起与冲刺；**本地角色死亡进入观战后，观察镜头附近的远端玩家** | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态。远端蹲/冲刺切换时该角色应短暂恢复完整行为（本轮新增：两个目标高度只由被跳过的那段写，冻结会让站立力与地面射线用错值）。**观战时镜头前的角色绝不应姿态凝固**（本轮把距离基准从本地角色改成了观察对象） |
+| D1 | `Experimental.RemoteRagdollLod`（一个开关，四个补丁） | 一名远端玩家从 40 米走到 70 米再返回并切换装备；远端玩家在 70 米外反复蹲下站起与冲刺；**本地角色死亡进入观战后，观察镜头附近的远端玩家** | 60 米外可降级，50 米内完整恢复；抓取、攀爬、死亡、观战始终完整运行；装备/卸装备首帧不使用陈旧姿态。远端蹲/冲刺切换时该角色应短暂恢复完整行为（1.2.0 新增：两个目标高度只由被跳过的那段写，冻结会让站立力与地面射线用错值）。**观战时镜头前的角色绝不应姿态凝固**（1.2.0 把距离基准从本地角色改成了观察对象） |
 | D3 | `DetailBodypartThrottle` | 8 人近距聚集、移动、抓取、攀爬、倒地 | 本地角色不受影响；远端手指/jiggle/嘴颌轻微降帧可接受；关节不漂浮、不爆力、不出现 NaN |
 | D4 | `PocketBehaviorGuard` | 新玩家加入 / 重连 | 注册窗口不再出现 `UpdatePocketBehaviors` 空引用刷屏；口袋物品（背包内被动效果）行为正常 |
 | D5 | `BodypartDragIdentity` | 倒地堆叠、被风滚草撞倒、拖拽 | 阻尼观感与原版一致；手指自然下垂正常；无速度异常累积 |
 | D6 | `LightVolumeSampleCache` | 多人聚集说话、进出隧道/开阔地、风区 | 语音混响随位置变化正常；环境混响与风区判定与原版一致；重烘焙/切段后无陈旧值 |
 | D7 | `TumbleWeedTargetScan` | 方山风滚草过境（单人与多人） | 风滚草仍追人、撞击掉血与击倒正常；转向无明显迟钝；非房主端行为不变 |
 
-### 2.6 聚集专项（本轮新增 5 项 + 2 条非 Harmony 车道）
+### 2.5 聚集专项（5 个补丁 + 2 条非 Harmony 车道）
 
 这一组必须在**多人**下看，单人不可能命中。
+
+下表 6 行覆盖 5 个补丁加 2 条车道：E1 与 E2 是同一个补丁的两个场景（2 人与 8 人），E5 的 `SnowballContactGuard` 一个开关管 2 个补丁，E4 与 E6 各带一条非 Harmony 车道（`CollisionCallbackReuse`、`CapBoneWeights`），车道不计入 44 个补丁。
 
 | 步骤 | 项 | 场景 | 通过条件 |
 |---|---|---|---|
@@ -133,7 +141,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | E5 | `Fixes.SnowballContactGuard`（一个开关，两个补丁） | 在雪地上滚一颗雪球两圈，再在石头/冰面上滚 | 雪球在雪地上变大、在非雪面不变大、可拾取上限行为与原版一致。这一步是 `CollisionCallbackReuse` 的专用验收项，**必做**。 |
 | E6 | `Graphics.CapBoneWeights`（默认关闭，需手动开启） | 8 人聚集观察角色关节（肩、肘、髋）形变 | 日志出现一行 `bone weight cap: launch value was <你的启动值>`；开启后关节处形变会略微变糙（这是代价），关掉应在 2 秒内还原。 |
 
-### 2.5 组合长时
+### 2.6 组合长时
 
 4 人组合长时（覆盖以上全部）：无累积日志、无状态分叉、无 `failed` 项。
 
@@ -157,7 +165,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 ### 3.5 爆炸卡顿（本次痛点）
 
-全员同时投掷多枚炸药，记录主观卡顿与帧率（外部工具或主观记录，务必与无插件基准对比）。当前基础上限为 **2 / 1**：近距单发主炸药 **5 球**（原版 10）、Small/Fae 3 球（原版 4）；**2.5 秒**、3.5 米内累计到 **1** 个邻近爆炸即进轻档（只缩到 85%，球数不变）、累计到 **3** 个进重档（2 球 + 60% 尺寸）；50–120 米为 2 球，120 米外仅中心球。确认视觉与震动削弱可接受，并重点排查生成炸药时卡死；当前实现绍不调用 `Shader.WarmupAllShaders()`。注意：孔菌爆炸、间歇泉/闪光植物的 `Explosion`、气球、火箭、GhostBall 都不含 `ExplosionEffect`，本补丁对它们无效——如果卡顿在那些场景，不属于本项的验收范围。
+全员同时投掷多枚炸药，记录主观卡顿与帧率（外部工具或主观记录，务必与无插件基准对比）。当前基础上限为 **2 / 1**：近距单发主炸药 **5 球**（原版 10）、Small/Fae 3 球（原版 4）；**2.5 秒**内、**一个火球半径**内累计到 **1** 个邻近爆炸即进轻档（只缩到 85%，球数不变，因为轻档上限恰等于基础上限）、累计到 **3** 个进重档（2 球 + 60% 尺寸，即中心球加一个环球）。判定半径按当发自己的 `baseScale` 推导（`baseScale × 6.0962`，主炸药约 **6.10 米**、Small/Fae 约 **3.05 米**），只有 `baseScale` 为 NaN/0/负/无穷时才回退到 3.5 米常量；50–120 米为 2 球，120 米外仅中心球。确认视觉与震动削弱可接受，并重点排查生成炸药时卡死；当前实现绝不调用 `Shader.WarmupAllShaders()`。注意：孔菌爆炸、间歇泉/闪光植物的 `Explosion`、气球、火箭、GhostBall 都不含 `ExplosionEffect`，本补丁对它们无效——如果卡顿在那些场景，不属于本项的验收范围。
 
 ### 3.6 八人近距聚集（核心对比）
 
@@ -177,7 +185,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 按 4 → 6 → 8 → 10 人递增复测 3.1、3.3、3.5，每档记录人数、地面物品数、主观流畅度、周期卡顿、日志新增。
 
-### 3.8 方山（Mesa / Desert）专项对比（本轮核心）
+### 3.8 方山（Mesa / Desert）专项对比（1.2.0 核心）
 
 在方山同一位置、同镜头方向做 8 人聚集，每组至少 60 秒帧率/帧时间：
 
@@ -212,7 +220,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 2. 对应 `com.peak.safeoptimizer.cfg`。
 3. `Player.log`（LocalLow）与崩溃转储。
 4. 游戏版本、MVID、人数、地图段落、地面物品数、复现步骤、时间点。
-5. 本轮启用键列表（只列 `true`）。
+5. 本次测试启用的键列表（只列 `true`）。
 6. 已安装其它模组清单。
 7. 网络/渲染问题需房主与客户端同期日志。
 
@@ -225,13 +233,13 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 兼容模式（certified / structural-validation）：
 BepInEx 版本 / 其它模组数量：
 人数与房主：
-本轮启用键（仅列 true）：
+本次启用键（仅列 true）：
 启动状态摘要（registered/enabled/applied/skipped/failed 数量与异常项及 Reason）：
 退出时是否 verified uninstall 失败：
 热重载自测结果（含分组开关与引擎标志时序两项）：
-第一层结果（A1–A8、B1–B13、C1–C8、D1–D3、组合长时）：
+第一层结果（A1–A8、B1–B13 无 B2、C1–C8、D1–D7 无 D2、E1–E6、组合长时）：
 第二层结果（掉落物数量、爆炸卡顿、人数阶梯、流畅度）：
-第三层结果（本轮实验项、专用观察点）：
+第三层结果（本次实验项、专用观察点）：
 无插件基准对比：
 日志中本插件异常数 / 其它模组异常数：
 结论：通过 / 停止 / 待复现
@@ -245,8 +253,8 @@ BepInEx 版本 / 其它模组数量：
 - 插件不提供帧率计数，流畅度请外部工具或主观记录并与无插件基准对比。
 - 单项失败被隔离，报告写明具体项与原因。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
-- **本轮（1.2.0）的全部改动都未经游戏内验证。** 按验收优先级排列：
-  1. **A5（表情轮）是最高优先级** —— 1.1.0 引入了一个真实的功能性回归（角色已死或已结算且 `refs.stats`/`input` 缺失时，守卫会把原版的「关闭表情轮」分支一起跳过，导致表情轮 UI、光标与暂停菜单卡住）。本轮重写了守卫使其精确复刻原版的两处短路。必须实测死亡/观战/结算三种状态下的开合。
+- **1.2.0 的全部改动都未经游戏内验证。** 按验收优先级排列：
+  1. **A5（表情轮）是最高优先级** —— 1.1.0 引入了一个真实的功能性回归（角色已死或已结算且 `refs.stats`/`input` 缺失时，守卫会把原版的「关闭表情轮」分支一起跳过，导致表情轮 UI、光标与暂停菜单卡住）。1.2.0 重写了守卫使其精确复刻原版的两处短路。必须实测死亡/观战/结算三种状态下的开合。
   2. **B13（爆炸）** —— 基础上限从 3/1 降到 2/1（主炸药 10→5 球），并新增了震动变弱这个代价声明。同时确认了火箭/背包/GhostBall 的爆炸不含 `ExplosionEffect`、完全不受本补丁影响。
   3. **D1/E1/E2（六项默认关闭）** —— 距离基准改为观察对象、crouch/sprint 纳入不降级、warmup 改按物理步、tick 号改双精度、相位改哈希、失败闩锁改按角色。开启前逐项走查，不要一次全开。
   4. **A6/A8（两个守卫与孢子）** —— 望远镜补了 `Center` 守卫且消除了诊断假阳性；孢子的 `EndFX` 次序改回原版同序、`Center` 异常改为真正消除。

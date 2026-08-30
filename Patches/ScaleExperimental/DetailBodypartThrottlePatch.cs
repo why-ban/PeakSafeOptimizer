@@ -2,17 +2,15 @@ using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
-using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Patches.Scale;
-using Photon.Pun;
 using UnityEngine;
 
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
     /// Opt-in: runs Bodypart.Animate(float, float) (audited source Bodypart.cs:143-153) only every
-    /// Nth rendered frame for the *detail* bodyparts (fingers, jiggle bones, toes, mouth/jaw) of a
-    /// remote, player-controlled, fully controlled and non-interacting character. Every other frame
+    /// Nth physics tick for the *detail* bodyparts (fingers, jiggle bones, toes, mouth/jaw) of a
+    /// remote, player-controlled, fully controlled and non-interacting character. On the other ticks
     /// the Prefix returns false and that one part is left to swing passively for a step.
     ///
     /// Why this exists next to <see cref="RemoteRagdollLod"/>: that helper is distance gated, so in
@@ -45,8 +43,17 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// targetOffsetRelativeToHip) keep being produced every physics step by
     /// CharacterRagdoll.FixedUpdate -> Bodypart.SaveAnimationData (CharacterRagdoll.cs:164-167),
     /// which this patch does not touch. There is therefore no warm-up requirement here: on an
-    /// execute frame the part is driven towards a fresh pose, and any Bodypart.SnapToAnim triggered
+    /// execute tick the part is driven towards a fresh pose, and any Bodypart.SnapToAnim triggered
     /// elsewhere reads targets that were written on that same step.
+    ///
+    /// Eligibility is <see cref="RemoteRagdollLod.PassesFallbacks(Character)"/> - the lane's one
+    /// fallback list, without the distance term, the tier state machine or the pose gate that
+    /// <see cref="RemoteRagdollLod.ShouldDowngrade"/> adds on top of it. This patch therefore calls
+    /// <see cref="RemoteRagdollLod.Acquire"/> in <see cref="Initialize"/> even though it is a separate
+    /// switch and can be the only member of the lane that is enabled: that list and
+    /// <see cref="RemoteRagdollLod.ResolveOwner"/> both run on accessors Acquire creates. Only
+    /// <see cref="RemoteRagdollLod.PhysicsTick"/> and <see cref="RemoteRagdollLod.Phase"/> are pure
+    /// computation and would work without it.
     /// </summary>
     internal static class DetailBodypartThrottlePatch
     {
@@ -56,15 +63,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// look broken, which is not a trade this patch offers.
         /// </summary>
         private const int Interval = 3;
-        private const float FullRagdollControlThreshold = 0.9f;
-        /// <summary>
-        /// Recency window that keeps a character unthrottled around an item equip, where
-        /// CharacterRagdoll.FixedUpdate and SnapToAnimation are driven manually from the equip
-        /// coroutine rather than by Unity (CharacterItems.cs:613-627 resets data.sinceItemAttach on
-        /// every iteration of that loop).
-        /// </summary>
-        private const float ItemAttachRecencySeconds = 0.5f;
-        private const string FixedJointTypeName = "UnityEngine.FixedJoint";
 
         /// <summary>
         /// Detail parts: high joint count, low visual weight. Verified against the audited
@@ -110,9 +108,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         };
 
         /// <summary>
-        /// Per-character one-frame decision cache. Animate is called once per part per physics step,
-        /// so without this the fallback list would be re-evaluated dozens of times per character per
-        /// frame. Never references its ConditionalWeakTable key.
+        /// Per-character one-physics-tick decision cache. Animate is called once per part per physics
+        /// step, so without this the fallback list would be re-evaluated dozens of times per character
+        /// per step. Never references its ConditionalWeakTable key.
         /// </summary>
         private sealed class State
         {
@@ -126,11 +124,17 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// </summary>
         private static bool[] _detailParts;
         private static AccessTools.FieldRef<Bodypart, BodypartType> _partType;
-        private static AccessTools.FieldRef<Bodypart, Character> _bodypartCharacter;
-        private static AccessTools.FieldRef<CharacterData, Character> _grabbedPlayer;
-        private static AccessTools.FieldRef<CharacterData, Character> _grabbingPlayer;
-        private static Func<CharacterData, UnityEngine.Object> _grabJoint;
         private static ConditionalWeakTable<Character, State> _states;
+        /// <summary>
+        /// Set once <see cref="RemoteRagdollLod.Acquire"/> has succeeded for this patch, so
+        /// <see cref="Reset"/> releases exactly one reference and only if one was taken. This patch
+        /// has its own configuration switch and can therefore be the *only* holder of that reference:
+        /// the shared accessors it reads (the Bodypart.character back reference behind
+        /// <see cref="RemoteRagdollLod.ResolveOwner"/>, and the CharacterData accessors behind
+        /// <see cref="RemoteRagdollLod.PassesFallbacks(Character)"/>) are created by Acquire and
+        /// dropped by the matching Release, so acquiring is not optional here.
+        /// </summary>
+        private static bool _acquired;
 
         internal static void Initialize()
         {
@@ -139,36 +143,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             FieldInfo partTypeField = ScaleValidation.RequireInstanceField(
                 typeof(Bodypart), "partType", typeof(BodypartType));
-            FieldInfo bodypartCharacterField = ScaleValidation.RequireInstanceField(
-                typeof(Bodypart), "character", typeof(Character));
-            FieldInfo grabJointField = ScaleValidation.RequireInstanceFieldByTypeName(
-                typeof(CharacterData), "grabJoint", FixedJointTypeName);
-            FieldInfo grabbedPlayerField = ScaleValidation.RequireInstanceField(
-                typeof(CharacterData), "grabbedPlayer", typeof(Character));
-            FieldInfo grabbingPlayerField = ScaleValidation.RequireInstanceField(
-                typeof(CharacterData), "grabbingPlayer", typeof(Character));
 
             bool[] table = BuildDetailTable();
             AccessTools.FieldRef<Bodypart, BodypartType> partType =
                 AccessTools.FieldRefAccess<Bodypart, BodypartType>(partTypeField);
-            AccessTools.FieldRef<Bodypart, Character> bodypartCharacter =
-                AccessTools.FieldRefAccess<Bodypart, Character>(bodypartCharacterField);
-            Func<CharacterData, UnityEngine.Object> grabJoint =
-                ScaleEmit.CreateUnityObjectFieldGetter<CharacterData>(grabJointField);
-            AccessTools.FieldRef<CharacterData, Character> grabbedPlayer =
-                AccessTools.FieldRefAccess<CharacterData, Character>(grabbedPlayerField);
-            AccessTools.FieldRef<CharacterData, Character> grabbingPlayer =
-                AccessTools.FieldRefAccess<CharacterData, Character>(grabbingPlayerField);
-            if (partType == null || bodypartCharacter == null || grabbedPlayer == null ||
-                grabbingPlayer == null || grabJoint == null)
+            if (partType == null)
                 throw new InvalidOperationException("DetailBodypartThrottle accessor creation failed");
+            var states = new ConditionalWeakTable<Character, State>();
 
-            _states = new ConditionalWeakTable<Character, State>();
+            // Acquired last, and after the allocation above, because it is the last statement here
+            // that can throw: it runs RemoteRagdollLod.ValidateStructure and creates the shared
+            // accessors. Everything below is a plain field assignment.
+            RemoteRagdollLod.Acquire();
+            _acquired = true;
+            _states = states;
             _partType = partType;
-            _bodypartCharacter = bodypartCharacter;
-            _grabbedPlayer = grabbedPlayer;
-            _grabbingPlayer = grabbingPlayer;
-            _grabJoint = grabJoint;
             // Published last: the Prefix treats a null table as "run the original", so it stays a
             // no-op until every accessor above exists.
             _detailParts = table;
@@ -188,11 +177,15 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         {
             _detailParts = null;
             _partType = null;
-            _bodypartCharacter = null;
-            _grabbedPlayer = null;
-            _grabbingPlayer = null;
-            _grabJoint = null;
             _states = null;
+            // Released after the fields above are cleared, so no hot-path read can observe a
+            // published table while the shared accessors are already gone. The installer only calls
+            // Reset once every Harmony method of this patch is confirmed detached.
+            if (_acquired)
+            {
+                _acquired = false;
+                RemoteRagdollLod.Release();
+            }
         }
 
         /// <summary>
@@ -220,6 +213,28 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if ((uint)index >= (uint)table.Length || !table[index])
                 return true;
 
+            // Fail-safe on the tick source, and the only reason this patch needs one at all: the
+            // throttle verdict is `(tick + phase) % Interval != 0`, so a *frozen* tick index does not
+            // cost a few extra skipped steps, it skips Animate for every phase != 0 forever.
+            // RemoteRagdollLod.PhysicsTick is Time.fixedTimeAsDouble / Time.fixedDeltaTime floored and
+            // narrowed, and a zero, negative, NaN or infinite fixed step makes that quotient
+            // non-finite; narrowing it is implementation defined and yields int.MinValue on x64, i.e.
+            // exactly the frozen index. Judged unreachable in practice rather than impossible:
+            // Time.fixedDeltaTime is > 0 whenever physics is stepping, and although
+            // UnityEngine.AdaptivePerformanceModule.dll does ship in PEAK_Data\Managed and its
+            // AdaptivePhysics scaler writes Time.fixedDeltaTime directly (AdaptivePhysics.cs:18, :30),
+            // it is a MonoBehaviour scaler that only runs when an Adaptive Performance provider is
+            // active, and nothing in the game or in this plugin references that assembly. Another mod
+            // could, though, and the value is not this plugin's to assume. Same predicate as the
+            // cluster lane (RemoteClusterAnimationThrottlePatch.cs:296-298) so the two
+            // cannot disagree about what a usable step is: !(dt > 0f) rejects 0, negatives and NaN
+            // (every comparison against NaN is false), float.IsInfinity rejects +/-Inf. One native
+            // float read and two compares, and it returns true - vanilla - which is the safe
+            // direction. No diagnostics here, per the ban above.
+            float fixedDeltaTime = Time.fixedDeltaTime;
+            if (!(fixedDeltaTime > 0f) || float.IsInfinity(fixedDeltaTime))
+                return true;
+
             // Stable per-part phase so the detail parts of a character do not all execute on the
             // same tick, which would trade a flat cost for a periodic spike. RemoteRagdollLod.Phase
             // mixes the instance id before the modulo: raw `id % Interval` collapses to one phase for
@@ -234,106 +249,79 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if ((physicsTick + phase) % Interval == 0)
                 return true;
 
-            AccessTools.FieldRef<Bodypart, Character> characterRef = _bodypartCharacter;
-            if (characterRef == null)
-                return true;
             // Bodypart.character is assigned in Bodypart.Start (Bodypart.cs:97); before that runs,
             // or on a stray part with no Character parent, the original must run unchanged.
-            Character owner = characterRef(__instance);
+            // RemoteRagdollLod.ResolveOwner reads that same back reference through the shared
+            // accessor and reports null when the accessor itself is missing, which covers what a
+            // local FieldRef null check used to do here.
+            Character owner = RemoteRagdollLod.ResolveOwner(__instance);
             if (owner == null)
                 return true;
-            return !ShouldThrottle(owner);
+            // The tick is handed over rather than re-read: it used to be computed a second time
+            // inside ShouldThrottle, which cost every detail part two more native Time property reads
+            // per physics step and left two computations of one value that must agree.
+            return !ShouldThrottle(owner, physicsTick);
         }
 
         /// <summary>
         /// Physics-step index. Delegates to <see cref="RemoteRagdollLod.PhysicsTick"/> so the two
         /// lanes can never disagree about which step they are on, and so the double-precision
-        /// derivation lives in one place. Verified safe to call even when this patch is enabled and
-        /// the RemoteRagdollLod group is not: PhysicsTick reads only Time.fixedTimeAsDouble and
-        /// Time.fixedDeltaTime and touches none of that class's fields, so it does not require
-        /// Acquire() to have run. (It used to be an inline
+        /// derivation lives in one place. PhysicsTick reads only Time.fixedTimeAsDouble and
+        /// Time.fixedDeltaTime and touches none of that class's fields, so unlike
+        /// <see cref="RemoteRagdollLod.PassesFallbacks(Character)"/> it does not depend on
+        /// <see cref="RemoteRagdollLod.Acquire"/> having run - which is why it may be called from the
+        /// early part of the Prefix, before the owner is even resolved. (It used to be an inline
         /// Mathf.FloorToInt(Time.fixedTime / Time.fixedDeltaTime) duplicated in two places here;
         /// Time.fixedTime is a float accumulated from process start, which loses the resolution to
         /// separate adjacent steps in a long session and shifts if anything writes
-        /// Time.fixedDeltaTime.)
+        /// Time.fixedDeltaTime.) It is called exactly once per Prefix invocation; the value is passed
+        /// down instead of being derived again.
         /// </summary>
         private static int PhysicsTick() => RemoteRagdollLod.PhysicsTick();
 
-        private static bool ShouldThrottle(Character c)
+        /// <summary>
+        /// Per-character throttle verdict, cached for the physics tick the caller is already on.
+        /// <paramref name="physicsTick"/> comes from the Prefix so that the cache key and the
+        /// `(tick + phase) % Interval` decision are provably the same step.
+        ///
+        /// The verdict itself is <see cref="RemoteRagdollLod.PassesFallbacks(Character)"/>, i.e. the
+        /// lane's single fallback list, so a condition added there reaches this patch too. This method
+        /// used to hold a line-by-line copy of that list, and the copy had already fallen behind once:
+        /// the crouch/sprint pose gate added to RemoteRagdollLod never appeared here. Only the cache
+        /// and the distance-free framing are local.
+        ///
+        /// Two conditions in that list are load-bearing for *this* patch specifically and are called
+        /// out here so they are not mistaken for generic ones:
+        ///   * data.isKinecmatic. The kinematic branch of Animate is SnapToAnim (Bodypart.cs:145-149),
+        ///     and CharacterRagdoll.ToggleKinematic sets data.isKinecmatic together with every part's
+        ///     Rigidbody.isKinematic (CharacterRagdoll.cs:80-87), so excluding it means a throttled
+        ///     step can never be a skipped snap.
+        ///   * data.sinceItemAttach. The equip coroutine drives CharacterRagdoll.FixedUpdate and
+        ///     SnapToAnimation manually (CharacterItems.cs:607-650, the resets at :625 inside the
+        ///     three-iteration loop), so a throttled Animate must not overlap that window.
+        /// No pose gate is needed here, unlike in <see cref="RemoteRagdollLod.ShouldDowngrade"/>: this
+        /// patch leaves CharacterRagdoll.FixedUpdate running, so data.targetHeadHeight and
+        /// data.targetHipHeight are refreshed on every physics step and cannot go stale.
+        /// </summary>
+        private static bool ShouldThrottle(Character c, int physicsTick)
         {
             ConditionalWeakTable<Character, State> states = _states;
-            Func<CharacterData, UnityEngine.Object> grabJoint = _grabJoint;
-            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef = _grabbedPlayer;
-            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef = _grabbingPlayer;
-            if (states == null || grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
+            if (states == null)
                 return false;
 
-            int physicsTick = PhysicsTick();
             bool hasState = states.TryGetValue(c, out State state);
             if (hasState && state.LastPhysicsTick == physicsTick)
                 return state.LastResult;
 
-            bool result = Evaluate(c, grabJoint, grabbedPlayerRef, grabbingPlayerRef);
+            // Returns false when the shared accessors are absent, which is the same "do not throttle"
+            // answer the local accessor null check used to give. No diagnostics anywhere on this path,
+            // per the ban in the Prefix docstring.
+            bool result = RemoteRagdollLod.PassesFallbacks(c);
             if (!hasState)
                 state = states.GetOrCreateValue(c);
             state.LastPhysicsTick = physicsTick;
             state.LastResult = result;
             return result;
-        }
-
-        /// <summary>
-        /// The RemoteRagdollLod fallback list with the distance term removed. Any hit means "never
-        /// throttle": that character keeps full vanilla behaviour on every part. Ordered cheapest
-        /// first. Every member read here is proven to exist by <see cref="ValidateStructure"/>.
-        /// </summary>
-        private static bool Evaluate(
-            Character c,
-            Func<CharacterData, UnityEngine.Object> grabJoint,
-            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef,
-            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef)
-        {
-            CharacterData data = c.data;
-            Character local = Character.localCharacter;
-            if (data == null || local == null)
-                return false;
-            if (c == local)
-                return false;
-            PhotonView view = c.photonView;
-            if (view == null || view.IsMine)
-                return false;
-            // Character.IsPlayerControlled is !isBot && !isZombie && !isScoutmaster
-            // (Character.cs:187-197): one read excludes bots, mushroom zombies and the scoutmaster,
-            // whose AI-driven animation state is deliberately left fully intact.
-            if (!c.IsPlayerControlled)
-                return false;
-            if (c.warping)
-                return false;
-            if (data.carrier != null || data.carriedPlayer != null)
-                return false;
-            if (data.isCarried || grabbedPlayerRef(data) != null || grabbingPlayerRef(data) != null)
-                return false;
-            if (data.dead || data.fullyPassedOut)
-                return false;
-            if (grabJoint(data) != null)
-                return false;
-            if (data.isClimbing || data.isRopeClimbing || data.isVineClimbing)
-                return false;
-            if (data.currentClimbHandle != null || data.isReaching || data.isKicking)
-                return false;
-            // The kinematic branch of Animate is SnapToAnim (Bodypart.cs:145-149), and
-            // CharacterRagdoll.ToggleKinematic sets data.isKinecmatic together with every part's
-            // Rigidbody.isKinematic (CharacterRagdoll.cs:80-87), so excluding it here means a
-            // throttled step can never be a skipped snap.
-            if (data.isKinecmatic)
-                return false;
-            if (data.sinceItemAttach < ItemAttachRecencySeconds)
-                return false;
-            // Written as >= so that a NaN control value also falls back.
-            if (!(data.currentRagdollControll >= FullRagdollControlThreshold))
-                return false;
-            if (Character.observedCharacter == c)
-                return false;
-            return true;
         }
 
         /// <summary>
@@ -385,50 +373,26 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         }
 
         /// <summary>
-        /// Exact structure check for every member the decision reads, plus the calls the safety
-        /// argument depends on: the four Bodypart calls that must stay in the physics loop, and the
-        /// SaveAnimationData producer that must keep running for a throttled part to be driven
-        /// towards a fresh pose on its execute frames. Anything that no longer matches throws and the
-        /// installer leaves the patch uninstalled.
+        /// Exact structure check for what is specific to *this* patch: the calls its safety argument
+        /// depends on. The members the fallback list reads are deliberately not re-asserted here -
+        /// that list now lives in <see cref="RemoteRagdollLod.PassesFallbacks(Character)"/> and every
+        /// member it touches is asserted by RemoteRagdollLod.ValidateStructure, which runs inside the
+        /// <see cref="RemoteRagdollLod.Acquire"/> call in <see cref="Initialize"/> - unconditionally,
+        /// including when this patch is the only member of the lane that is enabled. Duplicating those
+        /// ~25 assertions here is what let the copy of the fallback list drift in the first place: a
+        /// condition added to the shared list would have had to be mirrored in two validators as well
+        /// as two decision bodies. Time.fixedTimeAsDouble is asserted there too, for the same reason.
+        ///
+        /// What is still checked locally: Bodypart.partType (in <see cref="Initialize"/>), the
+        /// BodypartType enum shape (in <see cref="BuildDetailTable"/>), and the calls below. Anything
+        /// that no longer matches throws and the installer leaves the patch uninstalled.
         /// </summary>
         private static void ValidateStructure()
         {
-            ScaleValidation.RequireStaticField(typeof(Character), "localCharacter", typeof(Character));
-            ScaleValidation.RequireStaticProperty(typeof(Character), "observedCharacter", typeof(Character));
-            ScaleValidation.RequireInstanceField(typeof(Character), "data", typeof(CharacterData));
-            ScaleValidation.RequireInstanceField(typeof(Character), "isBot", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(Character), "isZombie", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(Character), "isScoutmaster", typeof(bool));
-            ScaleValidation.RequireInstanceProperty(typeof(Character), "IsPlayerControlled", typeof(bool));
-            ScaleValidation.RequireInstanceProperty(typeof(Character), "warping", typeof(bool));
-            ScaleValidation.RequireInheritedInstanceProperty(typeof(Character), "photonView", typeof(PhotonView));
-
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "carrier", typeof(Character));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "carriedPlayer", typeof(Character));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbedPlayer", typeof(Character));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbingPlayer", typeof(Character));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isCarried", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "currentClimbHandle", typeof(ClimbHandle));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isReaching", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isKicking", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "fullyPassedOut", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isClimbing", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isRopeClimbing", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isVineClimbing", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "isKinecmatic", typeof(bool));
-            ScaleValidation.RequireInstanceField(typeof(CharacterData), "sinceItemAttach", typeof(float));
-            ScaleValidation.RequireInstanceProperty(typeof(CharacterData), "dead", typeof(bool));
-            ScaleValidation.RequireInstanceProperty(
-                typeof(CharacterData), "currentRagdollControll", typeof(float));
-
-            // Physics-step index source, used through RemoteRagdollLod.PhysicsTick. Asserted here as
-            // well because this patch has its own toggle and can be installed while the
-            // RemoteRagdollLod group is not, so it must fail closed on its own if the double
-            // precision property ever disappears.
-            ScaleValidation.RequireStaticProperty(typeof(Time), "fixedTimeAsDouble", typeof(double));
-
             // Proof that the load-bearing part of the physics loop is still where the safety argument
             // assumes it is (CharacterMovement.cs:304-315). None of these is patched or called here.
+            // Asserted here rather than only through RemoteRagdollLod because they are this patch's
+            // own argument for why a skipped Animate step is passive rather than broken.
             ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterMovement), "FixedUpdate", typeof(void), Type.EmptyTypes, false);
             ScaleValidation.RequireInstanceMethod(
@@ -441,7 +405,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Bodypart), "ApplyForces", typeof(void), Type.EmptyTypes, false);
 
             // Proof that the animation targets a throttled part consumes on its execute frames keep
-            // being produced every physics step, which is why this patch needs no warm-up.
+            // being produced every physics step, which is why this patch needs no warm-up. The
+            // CharacterRagdoll.FixedUpdate assertion is unique to this patch: the distance lane skips
+            // that method, this one relies on it still running.
             ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterRagdoll), "FixedUpdate", typeof(void), Type.EmptyTypes, true);
             ScaleValidation.RequireInstanceMethod(

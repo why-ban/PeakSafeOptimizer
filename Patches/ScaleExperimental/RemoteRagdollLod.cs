@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
-using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Patches.Scale;
 using Photon.Pun;
 using UnityEngine;
@@ -14,12 +13,20 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// Shared distance tier decision for the four opt-in RemoteRagdollLod patches. It answers one
     /// question: may the animation-driven work of this remote character be skipped this frame?
     ///
-    /// What the four patches skip when this returns true:
+    /// Three of the four patches skip their target outright when this returns true:
     ///   CharacterRagdoll.FixedUpdate  (animation graph + IK evaluation, SaveAnimationData,
     ///                                  ResetRotation/ResetTransform, SetPhysicsMats)
     ///   Bodypart.Animate              (joint target rotation, follow torque, follow force)
     ///   Bodypart.AddMovementForce     (locally simulated movement force)
-    ///   CharacterAnimations.Update    (Animator parameter writes)
+    /// The fourth does not skip: <see cref="RemoteRagdollLodAnimatorPatch"/> replaces
+    /// CharacterAnimations.Update with a reduced body (the whole tail of its Prefix, after the
+    /// ShouldDowngrade test, is that body). It still writes the animation
+    /// helper transform, calls SetAnimSpeed, advances throwTime and sinceEmoteStart, runs the
+    /// emote-cancel condition and writes the InWater Animator parameter plus the myersDistance /
+    /// inWater resets; what it drops is the ~30 other Animator parameter writes and the Matrix4x4
+    /// look computation. Describing it as a skip would understate what still runs there - in
+    /// particular the two timers keep advancing, which is why that Prefix has to honour
+    /// __runOriginal.
     ///
     /// What is deliberately NOT touched, and why the result is a passive ragdoll rather than a
     /// broken one (all four calls stay in CharacterMovement.FixedUpdate, audited source
@@ -48,8 +55,18 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// </summary>
     internal static class RemoteRagdollLod
     {
-        internal const int TierFull = 0;
-        internal const int TierPassiveRagdoll = 2;
+        /// <summary>
+        /// The two tiers of the distance state machine. Private because every code reference is inside
+        /// this class; the only mention elsewhere is prose in RemoteRagdollLodPhysicsPatch.
+        ///
+        /// The values skip 1 on purpose, so that "2" keeps reading as "the most reduced tier" if an
+        /// intermediate tier is ever added between them. There is no tier 1 to look for today, and
+        /// nothing serialises or persists either number - they only live in <see cref="State.Tier"/>
+        /// for the lifetime of a Character, and every comparison is against these named constants - so
+        /// the gap costs nothing and renumbering would gain nothing.
+        /// </summary>
+        private const int TierFull = 0;
+        private const int TierPassiveRagdoll = 2;
 
         /// <summary>
         /// Distance hysteresis: a remote character enters the passive tier at or beyond
@@ -70,7 +87,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         ///    CharacterRagdoll.FixedUpdate. A character already beyond the enter distance on its very
         ///    first evaluated frame would otherwise be downgraded before those targets were ever
         ///    written, and any later Bodypart.SnapToAnim - which CharacterRagdoll.SnapToAnimation
-        ///    calls directly from the item-equip coroutine (CharacterItems.cs:613-628) - would then
+        ///    calls directly from the item-equip coroutine (CharacterItems.cs:607-650; the manual
+        ///    FixedUpdate/SnapToAnimation pairs are at :614-615 and :627-628) - would then
         ///    snap every bodypart onto the hip, because WorldTargetPos() = hip + Vector3.zero.
         ///    One physics step is not enough on its own: the very first CharacterRagdoll.FixedUpdate
         ///    of a character returns right after SetPhysicsMats through the firstFrame branch
@@ -91,17 +109,37 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         ///
         /// Counted in physics steps rather than rendered frames on purpose: the producer in (1) is
         /// driven by FixedUpdate, so at 200fps over a 50Hz fixed step a frame-counted window could
-        /// elapse without a single target write. The counter advances at most once per rendered frame,
-        /// because the decision cache below answers repeat calls within a frame from cache, so when
-        /// several physics steps share one rendered frame the window ends up longer than 15 steps
-        /// rather than shorter - erring long only delays a downgrade, which is the safe direction.
+        /// elapse without a single target write.
+        ///
+        /// The counter is gated twice over, and the interaction of the two gates is what actually sets
+        /// the window length. <see cref="ShouldDowngrade"/> increments <see cref="State.FullSteps"/>
+        /// only when it reaches the not-warmed branch, and to get there a call must pass *both*:
+        ///   * the per-rendered-frame decision cache (`state.LastFrame == frame` returns the cached
+        ///     answer), so at most one call per character per rendered frame gets that far - all the
+        ///     other per-bodypart calls of that frame are answered from cache and never touch the
+        ///     counter; and
+        ///   * the `state.LastWarmupTick != warmupTick` test, so a call only increments when the
+        ///     physics step has actually changed since the last increment.
+        /// The counter therefore advances at most once per rendered frame *and* at most once per
+        /// physics step, which makes the real window max(15 physics steps, 15 rendered frames) -
+        /// whichever of the two takes longer in wall-clock time:
+        ///   * 200fps over a 50Hz step (4 frames per step): the tick gate binds. Frames 2-4 of a step
+        ///     miss the frame cache but see an unchanged tick, so 15 increments need 15 distinct steps,
+        ///     i.e. 0.3s and ~60 frames.
+        ///   * 10fps over a 50Hz step (5 steps per frame): the frame cache binds. Only the first call
+        ///     of each rendered frame reaches the counter, and by then the tick has moved by 5, so 15
+        ///     increments need 15 rendered frames, i.e. 1.5s and 75 steps.
+        /// Neither direction can shorten the window below 15 physics steps, which is the property
+        /// requirement (1) needs; both can lengthen it, and erring long only delays a downgrade, which
+        /// is the safe direction. Mixing the two time bases is deliberate for exactly that reason.
         /// </summary>
         private const int WarmupPhysicsSteps = 15;
         /// <summary>
         /// Recency window that keeps a character at full behaviour around an item equip, where
         /// CharacterRagdoll.FixedUpdate and SnapToAnimation are invoked directly rather than by
-        /// Unity, so the snapped pose must not be stale (CharacterItems.cs:619-627 resets
-        /// data.sinceItemAttach on every iteration of that loop).
+        /// Unity, so the snapped pose must not be stale (CharacterItems.cs:607-650 is the coroutine;
+        /// its three-iteration loop at :622-632 resets data.sinceItemAttach at :625 on every
+        /// iteration).
         /// </summary>
         private const float ItemAttachRecencySeconds = 0.5f;
         private const string FixedJointTypeName = "UnityEngine.FixedJoint";
@@ -250,7 +288,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             //                      local character even while spectating, because owning a character
             //                      has nothing to do with where the camera is.
             //   viewpointCharacter = "what the camera is looking through". Used only as the distance
-            //                      origin. Character.observedCharacter is MainCameraMovement's spec
+            //                      origin, so it is read further down, right before Evaluate.
+            //                      Character.observedCharacter is MainCameraMovement's spec
             //                      target and falls back to localCharacter itself (Character.cs:
             //                      203-214), so after the local character dies and the player starts
             //                      spectating, the camera is somewhere else entirely. Measuring
@@ -260,15 +299,23 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // Mixing the two would either downgrade the character the camera is following or stop
             // downgrading everyone whenever the two differ, so they are never interchangeable.
             Character local = Character.localCharacter;
-            // Static property: read once into a local, then null-checked.
-            Character viewpointCharacter = Character.observedCharacter;
-            if (viewpointCharacter == null)
-                viewpointCharacter = local;
-            if (data == null || local == null || viewpointCharacter == null)
+            // Character.observedCharacter is deliberately *not* read here. It is a static property
+            // whose getter converts MainCameraMovement.specCharacter with (bool) (Character.cs:
+            // 203-214), i.e. one native liveness call, and its only consumer is Evaluate - which the
+            // per-frame cache below skips on every repeat call within a frame. It is therefore read
+            // just before Evaluate instead of on every one of the ~20k calls a 4-player lobby makes
+            // per second. Nothing between here and there depends on it.
+            if (data == null || local == null)
                 return false;
 
             int frame = Time.frameCount;
-            State state = states.GetOrCreateValue(c);
+            // TryGetValue before GetOrCreateValue: on Mono both take the same lock (mscorlib
+            // ConditionalWeakTable.TryGetValue / GetValue both lock the table), so this saves an
+            // uncontended recursive Monitor re-entry and the CreateValueCallback delegate read on the
+            // steady-state path, not a whole lock. Small, but it is the shape the sibling lane
+            // already uses (DetailBodypartThrottlePatch.cs:312-321).
+            if (!states.TryGetValue(c, out State state))
+                state = states.GetOrCreateValue(c);
             // Checked before the per-frame cache on purpose. CharacterItems.Equip writes
             // data.currentItem and then, in the same rendered frame, drives
             // ragdoll.FixedUpdate()/SnapToAnimation() manually before sinceItemAttach is reset.
@@ -311,13 +358,45 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // One evaluation per character per rendered frame. Animate/AddMovementForce are called
             // from physics while CharacterAnimations.Update is rendered; sharing this decision
             // avoids contradictory transitions between those call families.
+            //
+            // Precision limit of this cache, accepted rather than fixed: the unit is a rendered
+            // frame, while the callers run per physics step. When the frame rate is *below* the fixed
+            // step rate - 10fps against a 50Hz step is five physics steps per frame - the fallback
+            // list is re-evaluated ten times a second while Animate/AddMovementForce ask fifty times,
+            // so a remote character that starts climbing keeps being treated as downgraded for the
+            // rest of that rendered frame - up to four more physics steps in the 10fps/50Hz example.
+            // The lane's "any fallback hit means never downgrade" property is therefore exact only to
+            // one rendered frame, not to one physics step. That residue is appearance-level: the one
+            // dangerous sub-case, a manual SnapToAnimation during an item equip
+            // (CharacterItems.cs:607-650), is covered because the item gate above runs *before* this
+            // cache and forces a fresh answer, and every other fallback state simply keeps a limp pose
+            // for at most one frame longer. Making the cache per physics tick instead would
+            // re-evaluate the whole fallback list up to five times per rendered frame at exactly the
+            // frame rate where CPU headroom is scarcest, which is the wrong trade for a one-frame
+            // appearance residue.
             if (state.LastFrame == frame)
                 return state.LastResult;
 
             bool warmed = state.FullSteps >= WarmupPhysicsSteps;
-            bool result = warmed && Evaluate(
-                c, data, local, viewpointCharacter, grabJoint, grabbedPlayerRef, grabbingPlayerRef, state.Tier);
-            if (!warmed)
+            bool result = false;
+            if (warmed)
+            {
+                // Read here rather than at the top of the method: this is the only consumer, and
+                // every call that the cache above answers would otherwise pay for the property's
+                // native liveness check. The fallback to local is kept even though
+                // Character.observedCharacter cannot return null once localCharacter is alive
+                // (Character.cs:203-214 returns specCharacter only when (bool)specCharacter holds and
+                // otherwise returns localCharacter, and local was Unity-null-checked above) - it costs
+                // one reference compare on a non-cached frame and keeps Evaluate from ever being
+                // handed a null distance origin.
+                Character viewpointCharacter = Character.observedCharacter;
+                if (viewpointCharacter == null)
+                    viewpointCharacter = local;
+                result = Evaluate(
+                    c, data, local, viewpointCharacter, grabJoint, grabbedPlayerRef, grabbingPlayerRef,
+                    state.Tier);
+            }
+            else
             {
                 // Counted per physics step, not per rendered frame: the animation targets the warm-up
                 // waits for are produced by CharacterRagdoll.FixedUpdate. The decision cache above
@@ -388,8 +467,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// The item-identity check exists for the same reason as in <see cref="ShouldDowngrade"/>:
         /// CharacterItems.Equip writes data.currentItem and then drives
         /// CharacterRagdoll.FixedUpdate()/SnapToAnimation() manually in the same frame, before
-        /// data.sinceItemAttach is reset (CharacterItems.cs:602-627). A cached "throttle" answer there
-        /// could let a manual snap consume animation targets from an earlier tick.
+        /// data.sinceItemAttach is reset (CharacterItems.cs:607-650 - the first manual pair at
+        /// :614-615 runs before the loop that resets the timer at :625). A cached "throttle" answer
+        /// there could let a manual snap consume animation targets from an earlier tick.
         /// </summary>
         internal static bool ShouldThrottleAnimation(Character c)
         {
@@ -412,7 +492,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (data == null || local == null || viewpointCharacter == null)
                 return false;
 
-            State state = states.GetOrCreateValue(c);
+            // Same TryGetValue-then-create shape as ShouldDowngrade: on Mono both entry points lock
+            // the same table, so what this avoids on the steady-state path is an uncontended recursive
+            // Monitor re-entry plus the CreateValueCallback delegate read, not a lock.
+            if (!states.TryGetValue(c, out State state))
+                state = states.GetOrCreateValue(c);
             int itemId = data.currentItem != null ? data.currentItem.GetInstanceID() : 0;
             int poseFlags = PoseFlags(data);
             // Symmetrical with ShouldDowngrade's item/pose gates: a change in either invalidates the
@@ -441,6 +525,56 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         }
 
         /// <summary>
+        /// Fallback list for a caller that has neither a distance tier nor a per-frame decision of
+        /// its own to feed the seven-argument overload from: it resolves the character data, the local
+        /// character and the viewpoint exactly as <see cref="ShouldThrottleAnimation"/> does and then
+        /// runs the shared list. This is what <see cref="DetailBodypartThrottlePatch"/> calls, and it
+        /// is the reason that patch no longer carries its own transcription of the list.
+        ///
+        /// Deliberately *not* <see cref="ShouldDowngrade"/>: that adds the distance tier state
+        /// machine, the item/pose gates and the per-frame cache, none of which the detail lane wants.
+        /// It has no distance term by design (a tight cluster is exactly the case it exists for) and
+        /// no pose gate on purpose, because it leaves CharacterRagdoll.FixedUpdate alone, so
+        /// data.targetHeadHeight and data.targetHipHeight keep being refreshed on every physics step
+        /// and can never go stale the way <see cref="PoseFlags"/> guards against.
+        ///
+        /// Accessors missing - i.e. <see cref="Acquire"/> has not run - reports false, which every
+        /// caller reads as "do not reduce anything". No diagnostics, for the caller's sake: the detail
+        /// lane reaches this once per character per physics step and bans logging outright.
+        ///
+        /// One cost relative to the copy this replaced: Character.observedCharacter is read up front
+        /// rather than only when every other condition has already passed, so a character that fails
+        /// an early fallback now pays one extra native property read per physics step. That is the
+        /// same shape <see cref="ShouldThrottleAnimation"/> already has, and it is once per character
+        /// per step against the dozens of per-bodypart calls the lane removes.
+        /// </summary>
+        internal static bool PassesFallbacks(Character c)
+        {
+            Func<CharacterData, UnityEngine.Object> grabJoint = _grabJoint;
+            AccessTools.FieldRef<CharacterData, Character> grabbedPlayerRef = _grabbedPlayer;
+            AccessTools.FieldRef<CharacterData, Character> grabbingPlayerRef = _grabbingPlayer;
+            if (grabJoint == null || grabbedPlayerRef == null || grabbingPlayerRef == null)
+                return false;
+            if (c == null)
+                return false;
+
+            CharacterData data = c.data;
+            Character local = Character.localCharacter;
+            // Read once, with the same fallback ShouldThrottleAnimation uses, so the
+            // "never reduce the character the camera is looking through" test stays meaningful before
+            // a spec target exists. Character.observedCharacter returns specCharacter only when
+            // (bool)specCharacter holds and otherwise returns localCharacter (Character.cs:203-214).
+            Character viewpointCharacter = Character.observedCharacter;
+            if (viewpointCharacter == null)
+                viewpointCharacter = local;
+            if (data == null || local == null)
+                return false;
+
+            return PassesFallbacks(
+                c, data, local, viewpointCharacter, grabJoint, grabbedPlayerRef, grabbingPlayerRef);
+        }
+
+        /// <summary>
         /// Physics-step index, shared by every physics-phase patch in this lane so several of them
         /// cannot disagree about which step they are on.
         ///
@@ -458,10 +592,17 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// stops representing consecutive integers above 2^24 (~93 hours at 50Hz). The int itself wraps
         /// after 2^31 steps, about 497 days of continuous play at 50Hz, which is well past any session.
         /// A zero or non-finite fixed step would make the quotient non-finite and the narrowing
-        /// implementation defined; that is unchanged from the previous float expression, is not
-        /// reachable while physics is stepping, and the one lane that could act on such a value
-        /// (RemoteClusterAnimationThrottle) validates Time.fixedDeltaTime itself before asking for the
-        /// tick.
+        /// implementation defined - on x64 `(int)Math.Floor(double.PositiveInfinity)` yields
+        /// int.MinValue, so the index would freeze rather than advance. That is unchanged from the
+        /// previous float expression and is not reachable while physics is stepping, but it is *not*
+        /// screened out by the callers either, so each of them guards itself instead of relying on
+        /// this method: RemoteClusterAnimationThrottle rejects a non-positive or infinite
+        /// Time.fixedDeltaTime before asking for a tick
+        /// (RemoteClusterAnimationThrottlePatch.cs:296-298), and DetailBodypartThrottle does the same
+        /// in its Prefix (DetailBodypartThrottlePatch.cs:234-236) - it has to, because a frozen index
+        /// makes `(tick + phase) % Interval` constant and would skip Animate for some phases *forever*
+        /// rather than for a few steps. An earlier version of this comment claimed the cluster lane was
+        /// the only lane that could act on such a value; that was wrong.
         ///
         /// Pure computation: it reads two Unity statics and touches none of this class's fields, so it
         /// is safe to call from a patch that has not called <see cref="Acquire"/>.
@@ -543,6 +684,24 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// question about ownership, so they use <paramref name="local"/> even while spectating. Only
         /// the observed-character test and the distance term in <see cref="Evaluate"/> are about where
         /// the camera is.
+        ///
+        /// Shared contract, not a private helper: this is the single definition of the fallback list
+        /// for the whole lane. <see cref="Evaluate"/> (distance tier),
+        /// <see cref="ShouldThrottleAnimation"/> (cluster lane) and
+        /// <see cref="DetailBodypartThrottlePatch"/> (via the one-argument overload above) all route
+        /// through this body, so a condition added here reaches every consumer. That is the point:
+        /// DetailBodypartThrottlePatch used to carry a line-by-line copy, and the crouch/sprint pose
+        /// gate added to <see cref="ShouldDowngrade"/> never appeared in it. Adding a *distance* or
+        /// *pose* term here would change all three lanes at once and is therefore not allowed - those
+        /// belong in the callers, which is where they live today.
+        ///
+        /// Contains no diagnostics and must never gain any: DetailBodypartThrottlePatch reaches it
+        /// once per character per physics step and bans logging outright
+        /// (see the ban in DetailBodypartThrottlePatch.Prefix).
+        ///
+        /// Kept private even though it is now shared: cross-file callers go through the one-argument
+        /// overload above, which is the only shape that does not require the caller to hold the
+        /// accessors.
         /// </summary>
         private static bool PassesFallbacks(
             Character c,

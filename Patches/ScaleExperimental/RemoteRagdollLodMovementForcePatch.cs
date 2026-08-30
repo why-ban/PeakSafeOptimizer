@@ -1,4 +1,3 @@
-using System;
 using System.Reflection;
 using PeakSafeOptimizer.Patches.Scale;
 
@@ -33,7 +32,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceField(
                 typeof(CharacterData), "worldMovementInput_Lerp", typeof(UnityEngine.Vector3));
 
-            // Acquired last so a failed Initialize never leaves a reference on the shared helper.
+            // Acquired last: it is the final statement here that can throw (it runs
+            // RemoteRagdollLod.ValidateStructure and builds the shared accessors), and the only thing
+            // after it is a plain bool assignment, so a failed Initialize never leaves a reference on
+            // the shared helper.
             RemoteRagdollLod.Acquire();
             _acquired = true;
         }

@@ -33,6 +33,8 @@ namespace PeakSafeOptimizer.Patches.Scale
             FieldInfo characterField = ScaleValidation.RequireInstanceField(
                 typeof(CharacterItems), "character", typeof(Character));
             ScaleValidation.RequireInstanceProperty(typeof(Character), "player", typeof(Player));
+            // Read by the bot exclusion in Prefix below (Character.cs:111).
+            ScaleValidation.RequireInstanceField(typeof(Character), "isBot", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(Player), "itemSlots", typeof(ItemSlot[]));
             ScaleValidation.RequireInstanceMethod(
                 typeof(ItemSlot), "IsEmpty", typeof(bool), Type.EmptyTypes, true);
@@ -70,6 +72,9 @@ namespace PeakSafeOptimizer.Patches.Scale
             Character owner = characterRef(__instance);
             if (owner == null)
             {
+                // CharacterItems.character is assigned in Awake (CharacterItems.cs:144), before any
+                // Update can run, so this branch is unreachable in normal operation and a Hit here
+                // really would indicate a fault.
                 RateLimitedDiagnostics.Hit("PocketBehaviorGuard.character-unavailable");
                 return false;
             }
@@ -79,12 +84,24 @@ namespace PeakSafeOptimizer.Patches.Scale
             Player player = owner.player;
             if (player == null)
             {
-                RateLimitedDiagnostics.Hit("PocketBehaviorGuard.player-unavailable");
+                // Bots have no Photon Player, so Character.player - a PlayerHandler lookup keyed by
+                // view.Owner.ActorNumber (Character.cs:201, PlayerHandler.cs:206-209) - is null for
+                // them by design. CharacterItems.Update gates only on isStruggling
+                // (CharacterItems.cs:181-195), with no IsLocal/IsMine check, so without this
+                // exclusion every bot would produce one Hit per frame and swamp the counter that is
+                // read as evidence of a vanilla fault. Same reasoning and same fix as
+                // Patches\Stability\ParachutePatch.cs:96-102. Skipping the call itself is still
+                // correct for bots: the original would throw on character.player.itemSlots.
+                if (!owner.isBot)
+                    RateLimitedDiagnostics.Hit("PocketBehaviorGuard.player-unavailable");
                 return false;
             }
 
             if (player.itemSlots == null)
             {
+                // Player.itemSlots has a field initializer, `new ItemSlot[3]` (Player.cs:15), and
+                // Player.Awake fills every element (Player.cs:40-43), so a live Player can never
+                // expose a null array in normal operation.
                 RateLimitedDiagnostics.Hit("PocketBehaviorGuard.itemSlots-unavailable");
                 return false;
             }

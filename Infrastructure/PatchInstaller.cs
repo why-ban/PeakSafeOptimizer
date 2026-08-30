@@ -32,6 +32,18 @@ namespace PeakSafeOptimizer.Infrastructure
             /// "already installed" and do nothing.
             /// </summary>
             internal bool ResetPending;
+
+            /// <summary>
+            /// True when Harmony.Patch threw but left at least one of our methods attached. The exact
+            /// opposite situation to <see cref="ResetPending"/>, and deliberately a separate flag:
+            /// a ResetPending record has all of its Harmony methods proven detached and may be
+            /// reinstalled once its Reset finally succeeds, whereas this record still has live
+            /// Harmony methods and must never be installed again - patching on top of it would
+            /// attach a second copy of the same prefix/postfix. It is not live either, because the
+            /// patch as a whole failed and only part of it is attached, so IsInstalled reports false
+            /// and the only legal next step is an uninstall.
+            /// </summary>
+            internal bool AttachedAfterFailure;
         }
 
         private const string CertifiedMode = "certified";
@@ -107,18 +119,31 @@ namespace PeakSafeOptimizer.Infrastructure
         }
 
         /// <summary>
-        /// True only when this patch is live. A record whose Harmony methods are all detached but
-        /// whose Reset threw is retained for a later retry and reports false here, because callers
-        /// such as the collision-reuse lane gate engine-wide state on a patch actually being active.
+        /// True only when this patch is live, i.e. a record exists and it is neither of the two
+        /// not-live shapes. A record whose Harmony methods are all detached but whose Reset threw
+        /// (ResetPending) is retained for a later retry, and a record left behind by a Patch call
+        /// that threw after attaching part of the patch (AttachedAfterFailure) is retained for
+        /// verified cleanup; both report false here, because callers such as the collision-reuse lane
+        /// gate engine-wide state on a patch actually being active and correct.
         /// </summary>
         public bool IsInstalled(PatchId id) =>
-            _installed.TryGetValue(id, out InstalledPatch installed) && !installed.ResetPending;
+            _installed.TryGetValue(id, out InstalledPatch installed) &&
+            !installed.ResetPending && !installed.AttachedAfterFailure;
 
         /// <summary>
-        /// True while any record remains, including one that is only kept to retry a failed Reset.
-        /// Shutdown uses this to decide whether static state was proven clean.
+        /// True while any record remains, including one that is only kept to retry a failed Reset or
+        /// to clean up a partially attached failed Patch. Shutdown uses this to decide whether static
+        /// state was proven clean.
         /// </summary>
         public bool HasInstalledPatches => _installed.Count != 0;
+
+        /// <summary>
+        /// True when a record exists at all, whatever shape it is in. Group rollback uses this rather
+        /// than <see cref="IsInstalled"/> to decide whether a member was really withdrawn: a record
+        /// that survives an uninstall attempt means either live Harmony methods or unproven static
+        /// state, and neither is a clean withdrawal.
+        /// </summary>
+        private bool IsRecorded(PatchId id) => _installed.ContainsKey(id);
 
         /// <summary>
         /// Hot-reload entry point. Enabled=true installs (idempotent; reuses the same isolated
@@ -144,6 +169,24 @@ namespace PeakSafeOptimizer.Infrastructure
             return status;
         }
 
+        /// <summary>
+        /// Group membership for one id, degrading to the single id whenever the resolver is absent,
+        /// empty, inconsistent or throwing.
+        ///
+        /// The degradation is not equally harmless on both paths. In <see cref="Install"/> it is: the
+        /// outer loop keeps iterating over the remaining registrations, so every sibling still gets
+        /// installed on its own turn and the group ends up complete, just without the all-or-nothing
+        /// coupling. In <see cref="Toggle"/> it is not: the toggle only ever touches the ids returned
+        /// here, so a degraded resolution installs or removes the representative alone and leaves the
+        /// siblings in whatever state they were in - exactly the half-installed group the grouping
+        /// exists to prevent, and with no report entry for the untouched members.
+        ///
+        /// This is left as-is rather than failing the whole switch closed, because reaching it
+        /// requires <see cref="OptimizerConfig.GetGroupMembers"/> to throw, and that method is two
+        /// dictionary lookups over dictionaries built once in the constructor. Adding a
+        /// degradation flag plus a Toggle-side abort would add a new failure path to a path that
+        /// cannot currently be reached, which is a worse trade than documenting it.
+        /// </summary>
         private IReadOnlyList<PatchId> ResolveGroup(PatchId id)
         {
             Func<PatchId, IReadOnlyList<PatchId>> resolver = _groupResolver;
@@ -223,16 +266,28 @@ namespace PeakSafeOptimizer.Infrastructure
                 PatchId member = installedNow[i];
                 PatchStatus removal = NewStatus();
                 UninstallOne(member, removal);
-                bool stillInstalled = IsInstalled(member);
-                if (stillInstalled)
+                // IsRecorded, not IsInstalled: UninstallOne keeps the record in both of its failure
+                // shapes, and one of them (all methods detached, Reset threw) sets ResetPending, which
+                // IsInstalled excludes. Judging withdrawal by IsInstalled therefore reported a clean
+                // rollback while a record with unproven static state was still sitting in _installed
+                // and the FailedUninstall entry written into `removal` was dropped on the floor.
+                if (IsRecorded(member))
                 {
-                    // Uninstall failed; UninstallOne already recorded why and kept the record so the
-                    // accessors stay valid under the live Harmony method. Report it as a failure
-                    // rather than pretending the group is clean.
+                    // UninstallOne already logged and recorded why, in `removal`. Carry that reason
+                    // over into the caller's status so it is not lost, and say which of the two shapes
+                    // this is, because they need different things from the user: live Harmony methods
+                    // mean the patch is still running, whereas a failed Reset means it is detached but
+                    // its static state was never proven clean.
                     string removalReason = FindReason(removal, member.ToString()) ?? "uninstall incomplete";
+                    bool detachedButUnclean =
+                        _installed.TryGetValue(member, out InstalledPatch leftover) && leftover.ResetPending;
+                    string shape = detachedButUnclean
+                        ? "Harmony methods are detached but its Reset threw, so its static state is not proven clean"
+                        : "at least one Harmony method is still attached, so this member is still running";
                     status.Replace(member.ToString(), new PatchStatusEntry(
                         member.ToString(), true, PatchResult.FailedUninstall,
-                        $"group rollback for {failedMember} left this member installed ({removalReason})"));
+                        $"group rollback for {failedMember} could not withdraw this member: {shape} " +
+                        $"({removalReason})"));
                     continue;
                 }
                 status.Replace(member.ToString(), new PatchStatusEntry(
@@ -240,13 +295,28 @@ namespace PeakSafeOptimizer.Infrastructure
                     $"withdrawn because {failedMember} could not be installed: {failedReason}"));
             }
 
-            // Members that were never reached at all are reported too, so the log accounts for every
-            // patch the switch controls instead of going quiet after the failure.
+            // Every other member is accounted for too, so the log does not go quiet after the
+            // failure. Two cases: a member that was never reached, and a member that was already live
+            // before this call - the latter is not in installedNow and is deliberately left alone,
+            // because uninstalling something a previous install brought up would introduce a failure
+            // mode this rollback cannot recover from. It is reported instead, so a half-installed
+            // switch is visible rather than silent.
             for (int i = 0; i < group.Count; i++)
             {
                 PatchId member = group[i];
-                if (member == failedMember || IsInstalled(member))
+                if (member == failedMember)
                     continue;
+                if (installedNow.Contains(member))
+                    continue; // Already reported by the withdrawal loop above, in either outcome.
+                if (IsInstalled(member))
+                {
+                    status.Replace(member.ToString(), new PatchStatusEntry(
+                        member.ToString(), true, PatchResult.FailedUninstall,
+                        $"still installed from an earlier install while {failedMember} could not be " +
+                        $"installed ({failedReason}); this switch is now half installed and was left " +
+                        "that way on purpose - toggle it off to remove this member"));
+                    continue;
+                }
                 if (FindReason(status, member.ToString()) != null)
                     continue;
                 status.Add(new PatchStatusEntry(
@@ -255,6 +325,15 @@ namespace PeakSafeOptimizer.Infrastructure
             }
         }
 
+        /// <summary>
+        /// Reason of the *last* entry with this name. Mirror image of
+        /// <see cref="PatchStatus.Replace"/>, which rewrites the *first*. Both rely on the same
+        /// premise: within one PatchStatus a given patch name appears at most once. That holds because
+        /// Install handles every id exactly once (the `handled` set) and Toggle walks one group. If a
+        /// group resolver ever returned a duplicated id the two would disagree - Replace would rewrite
+        /// the first occurrence while FindReason read the second - and the report would carry two
+        /// contradictory entries for one patch.
+        /// </summary>
         private static string FindReason(PatchStatus status, string name)
         {
             for (int i = status.Entries.Count - 1; i >= 0; i--)
@@ -287,6 +366,22 @@ namespace PeakSafeOptimizer.Infrastructure
             string name = id.ToString();
             if (_installed.TryGetValue(id, out InstalledPatch existing))
             {
+                if (existing.AttachedAfterFailure)
+                {
+                    // A previous Patch call threw after Harmony had already attached part of this
+                    // patch. Those methods are still live, so reinstalling here would attach a second
+                    // copy of the same prefix/postfix, and the only safe move is to do no Harmony work
+                    // at all and report the record. Fail, not Reject: this is not a compatibility
+                    // verdict about the game build, it is our own leftover state, and it needs to be
+                    // an error in the log so it is not mistaken for a clean skip. FailedPatch rather
+                    // than FailedUninstall because the fault originates in the failed Patch call, and
+                    // reusing that value keeps the two lines of a single incident under one result.
+                    Fail(status, name, existing.Compatibility, PatchResult.FailedPatch, "Patch retry",
+                        new InvalidOperationException(
+                            "a previous Patch attempt left Harmony methods attached; turn this switch " +
+                            "off and on again to detach them before installing"));
+                    return;
+                }
                 if (!existing.ResetPending)
                 {
                     status.Add(new PatchStatusEntry(
@@ -401,9 +496,18 @@ namespace PeakSafeOptimizer.Infrastructure
                 InstalledPatch partial = CreateInstalled(target, definition, prefix, postfix, transpiler, finalizer);
                 if (HasAttachedMethod(partial))
                 {
+                    // HarmonyX registers the patch methods in the target's PatchInfo before it
+                    // generates the wrapper, so a throw out of UpdateWrapper leaves our methods
+                    // listed and this branch is the normal one, not a rarity. Mark the record as a
+                    // failed-but-attached leftover: it is retained only so a later uninstall can
+                    // detach those methods with per-method verification, and it must not count as
+                    // installed anywhere.
+                    partial.AttachedAfterFailure = true;
                     _installed[id] = partial;
                     _log?.LogWarning(
-                        $"{name} Patch threw after attaching at least one Harmony method; retained for verified cleanup.");
+                        $"{name} Patch threw after attaching at least one Harmony method; the patch is " +
+                        "NOT active and is recorded only so an uninstall can detach what is attached. " +
+                        "Turn this switch off and on again to clean it up.");
                 }
                 else
                 {
@@ -476,6 +580,9 @@ namespace PeakSafeOptimizer.Infrastructure
         private void UninstallOne(PatchId id, PatchStatus status)
         {
             string name = id.ToString();
+            // Keyed on the record, deliberately not on IsInstalled: the two not-live record shapes
+            // (ResetPending and AttachedAfterFailure) are exactly the ones that most need to be
+            // cleaned up here, and gating this on IsInstalled would strand them in _installed forever.
             if (!_installed.TryGetValue(id, out InstalledPatch installed))
             {
                 status.Add(new PatchStatusEntry(name, false, PatchResult.SkippedNotInstalled, "not installed"));
@@ -522,6 +629,13 @@ namespace PeakSafeOptimizer.Infrastructure
                     installed.Compatibility));
                 return;
             }
+
+            // Every method is confirmed detached from here on, so a failed-but-attached record has
+            // nothing attached any more and the flag that describes it no longer holds. Clearing it
+            // matters: if Reset then throws, the record survives as a plain ResetPending one, which
+            // InstallOne is allowed to retry. Leaving both flags set would make the record refuse
+            // reinstallation forever even though no Harmony method is attached to double-patch.
+            installed.AttachedAfterFailure = false;
 
             // Order matters: all Unpatch calls succeeded → Reset → drop the record.
             if (installed.Reset != null)
@@ -577,19 +691,100 @@ namespace PeakSafeOptimizer.Infrastructure
         }
 
         /// <summary>
-        /// Maps a validation exception onto a compatibility verdict. Missing or reshaped members are a
-        /// structural mismatch; IL-pattern and IL-generation complaints are an IL mismatch; anything
-        /// else stays a genuine failure. Every branch leaves the patch uninstalled.
+        /// Maps a validation exception thrown out of <c>Initialize</c> or <c>ResolveTarget</c> onto a
+        /// compatibility verdict. Missing or reshaped members are a structural mismatch; IL-pattern
+        /// and IL-generation complaints are an IL mismatch; anything else stays a genuine failure.
+        /// Every branch leaves the patch uninstalled - the classification only decides the log level
+        /// (Reject → warning, Fail → error) and which bucket the report totals count it in.
+        ///
+        /// The structural arm is type-based for MissingMemberException/TypeLoadException, and for
+        /// InvalidOperationException it is a default-yes with one carved-out exception, because
+        /// InvalidOperationException carries two different meanings in this codebase:
+        ///
+        /// * "this game member no longer has the audited shape" - the three validation helpers
+        ///   (Patches\Scale\ScaleValidation, Patches\Stability\StabilityPatchValidation,
+        ///   Patches\Equivalent\MathAndScan\MathAndScanValidation) all word this as "Unexpected …",
+        ///   but about a hundred further throw sites across the patch files hand-roll their own
+        ///   reflection self-check and word it freely ("ItemState.Ground is no longer defined",
+        ///   "PlayerGroundSample is no longer a struct", "Campfire.s_CampfireBuff failed structural
+        ///   self-check"). Keying the structural verdict on the helpers' "Unexpected " prefix would
+        ///   therefore demote all of those to plugin failures, which is exactly backwards: they are
+        ///   the normal outcome of a game update and must stay a warning-level compatibility skip.
+        /// * "the member shape was fine but our own accessor emission returned null" - a real plugin
+        ///   fault, reported until now as SkippedStructureMismatch, i.e. telling the user their game
+        ///   build is unsupported when the bug is ours.
+        ///
+        /// The second family is identifiable without touching any patch file, because it has one
+        /// uniform vocabulary: every one of its 38 sites throws a message ending in "creation failed"
+        /// or "binding failed" ("&lt;X&gt; accessor creation failed", "&lt;X&gt; FieldRef creation
+        /// failed", "&lt;X&gt; getter creation failed", "&lt;X&gt; delegate creation failed",
+        /// "&lt;X&gt; delegate binding failed"), and every one of them sits behind a
+        /// <c>if (accessor == null …)</c> guard placed *after* that patch's structural checks have
+        /// already passed - verified site by site, examples
+        /// Patches\ScaleExperimental\RemoteRagdollLod.cs:195,
+        /// Patches\Stability\RunBasedValuesPatch.cs:45,
+        /// Patches\Scale\CampfireProtectionMergePatch.cs:60. So those fall through to the caller's
+        /// fallback (FailedInitialize / FailedResolve) and are logged as errors.
+        ///
+        /// This is still message sniffing and still fragile, with a known failure direction: a future
+        /// emission guard worded differently is misreported as a compatibility skip, exactly as all of
+        /// them were before. It fails that way rather than the reverse on purpose - the cost of a
+        /// wrongly-skipped plugin bug is a misleading log line, whereas the cost of wrongly failing a
+        /// structural mismatch is an error storm on every game update. The robust fix is a dedicated
+        /// exception type thrown by the patches themselves, which is a change to every patch file.
         /// </summary>
         private static PatchResult ClassifyValidationFailure(Exception ex, PatchResult fallback)
         {
             if (LooksLikeIlFailure(ex))
                 return PatchResult.SkippedIlMismatch;
-            if (ex is MissingMemberException || ex is TypeLoadException || ex is InvalidOperationException)
+            if (ex is MissingMemberException || ex is TypeLoadException)
+                return PatchResult.SkippedStructureMismatch;
+            if (ex is InvalidOperationException && !LooksLikeAccessorEmissionFailure(ex))
                 return PatchResult.SkippedStructureMismatch;
             return fallback;
         }
 
+        /// <summary>
+        /// True when this exception, or any exception it wraps, is one of the patches' own
+        /// accessor/delegate emission guards rather than a verdict about the game build. Matched on
+        /// the message tail because that suffix is the convention every one of those guards follows;
+        /// see <see cref="ClassifyValidationFailure"/> for the enumeration and the known fragility.
+        /// </summary>
+        private static bool LooksLikeAccessorEmissionFailure(Exception ex)
+        {
+            for (Exception current = ex; current != null; current = current.InnerException)
+            {
+                string message = current.Message ?? string.Empty;
+                if (message.EndsWith("creation failed", StringComparison.Ordinal) ||
+                    message.EndsWith("binding failed", StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Heuristic "this is an IL problem, not a plugin bug" test, used for the Transpiler and
+        /// Finalizer pipeline.
+        ///
+        /// Currently unreachable in both of its roles, and kept anyway. This plugin ships no
+        /// Transpiler: all 44 PatchDefinition constructions pass only <c>prefix:</c>/<c>postfix:</c>,
+        /// and there is no <c>transpiler:</c> or <c>finalizer:</c> argument anywhere in the
+        /// repository - so <c>transpiler != null</c> at the Patch call site is always false, and the
+        /// HarmonyException arm below can only be reached through <see cref="ClassifyValidationFailure"/>,
+        /// where no current patch throws a HarmonyException out of Initialize or ResolveTarget. It
+        /// stays because the Transpiler pipeline is a fail-closed safety net: the day a Transpiler is
+        /// added, an IL mismatch must degrade to a compatibility skip rather than be reported as a
+        /// plugin bug, and re-deriving this at that point is how the net gets forgotten.
+        ///
+        /// The message sniffing is deliberately kept as-is rather than tightened. It is only consulted
+        /// for exceptions coming out of Harmony's own IL generation (or out of an IL matcher a future
+        /// Transpiler supplies), whose wording this plugin does not control, so a substring test is
+        /// the only thing available. Verified today: no exception message thrown anywhere in this
+        /// repository contains "IL ", "instruction", "pattern", "audited" or "found 0", so it cannot
+        /// currently misclassify one of our own messages - but note that it is consulted *first* by
+        /// ClassifyValidationFailure, so any patch message that later picks up one of those words
+        /// would be reported as an IL mismatch on a plugin that has no Transpiler at all.
+        /// </summary>
         private static bool LooksLikeIlFailure(Exception ex)
         {
             for (Exception current = ex; current != null; current = current.InnerException)

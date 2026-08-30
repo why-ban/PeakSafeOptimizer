@@ -55,6 +55,21 @@ namespace PeakSafeOptimizer.Patches.Stability
     /// scene-sized, so the duplicate call is cheaper than the branch misprediction it replaces and far
     /// cheaper than the exception it prevents.
     ///
+    /// Known limitation of that cost argument, one case where the duplicate call is not free. On a
+    /// segment with <c>hasVariant</c> the <c>biome</c> getter calls
+    /// <c>GetVariantSegmentFromBiome(variantBiomeIndex)</c> once inside the <c>BiomeIsPresent</c> test
+    /// and again to return the value (MapHandler.cs:48,50), and that method logs
+    /// <c>Debug.LogError("Requested biome index is out of range of variant segments...")</c> whenever
+    /// the index falls outside <c>variantSegments</c> (MapHandler.cs:1042-1050, error at :1046). So on
+    /// a segment whose <c>variantBiomeIndex</c> (MapHandler.cs:40) is misconfigured, a single
+    /// <c>GetCurrentBiome()</c> already writes one error line, and two when the fallback
+    /// <c>segments[0].biome</c> also passes <c>BiomeIsPresent</c>. This Prefix doubles whichever of
+    /// those it is, so up to four error log writes per frame per raised binocular. Accepted rather
+    /// than worked around: the condition is a scene-data defect that produces the same spam from every
+    /// other <c>biome</c>, <c>segmentParent</c>, <c>segmentCampfire</c> and <c>dayNightProfile</c> read
+    /// in the frame (MapHandler.cs:56-90), and the alternative - not reproducing the guard clause -
+    /// reintroduces the diagnostic over-counting argued for above.
+    ///
     /// This Prefix is read-only. It skips the frame only when the original would dereference
     /// something that is unavailable, and otherwise returns true so the original runs unchanged. The
     /// only consequence of a skipped frame is that the badge check does not happen on that frame.
@@ -96,18 +111,30 @@ namespace PeakSafeOptimizer.Patches.Stability
                 typeof(MapHandler), "GetCurrentBiome", typeof(Biome.BiomeType), Type.EmptyTypes);
             if (!Enum.IsDefined(typeof(Biome.BiomeType), Biome.BiomeType.Mesa))
                 throw new InvalidOperationException("Biome.BiomeType.Mesa is no longer defined");
+            // Hand-rolled because StabilityPatchValidation has no static-field helper. Checks match
+            // Patches\Scale\ScaleValidation.RequireStaticField (:105-113): DeclaredOnly in the binding
+            // flags plus an explicit DeclaringType test, so a same-named static inherited from a
+            // future base class cannot satisfy the check. Public-only rather than that helper's
+            // Public|NonPublic, and deliberately so: the Prefix reads these statics through directly
+            // compiled access, which a demoted field would no longer permit. Declared on
+            // DayNightManager itself (DayNightManager.cs:34).
             FieldInfo instanceField = typeof(DayNightManager).GetField(
-                "instance", BindingFlags.Static | BindingFlags.Public);
+                "instance",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.DeclaredOnly);
             if (instanceField == null || !instanceField.IsStatic ||
+                instanceField.DeclaringType != typeof(DayNightManager) ||
                 instanceField.FieldType != typeof(DayNightManager))
             {
                 throw new InvalidOperationException("DayNightManager.instance failed structural self-check");
             }
             StabilityPatchValidation.RequireInstanceField(typeof(DayNightManager), "sun", typeof(Light));
 
+            // Declared on MainCamera itself (MainCamera.cs:5).
             FieldInfo cameraInstance = typeof(MainCamera).GetField(
-                "instance", BindingFlags.Static | BindingFlags.Public);
+                "instance",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.DeclaredOnly);
             if (cameraInstance == null || !cameraInstance.IsStatic ||
+                cameraInstance.DeclaringType != typeof(MainCamera) ||
                 cameraInstance.FieldType != typeof(MainCamera))
             {
                 throw new InvalidOperationException("MainCamera.instance failed structural self-check");
@@ -122,9 +149,13 @@ namespace PeakSafeOptimizer.Patches.Stability
             // The Center chain. Character.Center is asserted because this is the value the torso
             // lookup below stands in for; the rest is the non-throwing route to it, the same one
             // Patches\ScaleExperimental\ExplosionScalePatch.cs and RemoteRagdollLod.cs take.
+            // Declared on Character itself (Character.cs:117); same DeclaredOnly + DeclaringType
+            // shape as the two static fields above.
             FieldInfo localCharacterField = typeof(Character).GetField(
-                "localCharacter", BindingFlags.Static | BindingFlags.Public);
+                "localCharacter",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.DeclaredOnly);
             if (localCharacterField == null || !localCharacterField.IsStatic ||
+                localCharacterField.DeclaringType != typeof(Character) ||
                 localCharacterField.FieldType != typeof(Character))
             {
                 throw new InvalidOperationException("Character.localCharacter failed structural self-check");

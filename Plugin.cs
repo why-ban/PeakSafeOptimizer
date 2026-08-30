@@ -87,12 +87,14 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Startup rollback: unsubscribe SettingChanged failed safely: {ex.GetType().Name}: {ex.Message}");
             }
 
-            bool fullyUninstalled = UninstallAll("Startup rollback");
-            // Engine-global state is restored either way: it is not tied to whether the Harmony
-            // uninstall succeeded, and this component keeps receiving Update after a failed Awake,
-            // so leaving the lanes armed would keep writing engine state for a plugin that has
-            // already given up.
+            // Engine-global state first, in the same order as OnDestroy: Physics.reuseCollisionCallbacks
+            // is only safe while the Snowball guards are live, so the flag has to come down before the
+            // guards are detached, not after. It also runs unconditionally, because this component
+            // keeps receiving Update after a failed Awake and leaving the lanes armed would keep
+            // writing engine state for a plugin that has already given up.
             ShutdownGlobalLanes();
+
+            bool fullyUninstalled = UninstallAll("Startup rollback");
             if (fullyUninstalled)
             {
                 DisposeLifecycle("Startup rollback");
@@ -105,8 +107,10 @@ namespace PeakSafeOptimizer
             else
             {
                 Logger.LogError(
-                    "PeakSafeOptimizer | startup rollback left one or more patches attached; " +
-                    "their state was retained rather than reset underneath live Harmony methods.");
+                    "PeakSafeOptimizer | startup rollback could not account for every patch: one or " +
+                    "more records remain, either with Harmony methods still attached or detached but " +
+                    "with their Reset still failing. Their state was retained rather than reset " +
+                    "underneath a possibly live Harmony method.");
             }
         }
 
@@ -233,8 +237,10 @@ namespace PeakSafeOptimizer
             else
             {
                 Logger.LogError(
-                    "PeakSafeOptimizer shutdown left one or more patches attached; state was retained " +
-                    "to keep those methods safe until process exit.");
+                    "PeakSafeOptimizer shutdown could not account for every patch: one or more records " +
+                    "remain, either with Harmony methods still attached or detached but with their " +
+                    "Reset still failing. Their state was retained to keep those methods safe until " +
+                    "process exit.");
             }
         }
 

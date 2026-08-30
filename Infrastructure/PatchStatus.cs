@@ -4,7 +4,15 @@ using System.Linq;
 
 namespace PeakSafeOptimizer.Infrastructure
 {
-    /// <summary>Coarse category used by callers that only need applied/skipped/failed.</summary>
+    /// <summary>
+    /// Coarse category used by callers that only need applied/skipped/failed.
+    ///
+    /// Deliberately still exactly three values. <c>Plugin.ApplySettingChange</c> switches on this
+    /// without a <c>default</c> arm, so a fourth member would be silently unhandled there and a
+    /// successful hot-reload uninstall would stop logging its one line. The finer distinction lives
+    /// in <see cref="PatchResult"/>, which every report line prints, so nothing is lost by keeping
+    /// this coarse: see PatchStatusEntry.Classify for the exact mapping.
+    /// </summary>
     public enum PatchOutcome { Applied, Skipped, Failed }
 
     /// <summary>
@@ -70,13 +78,42 @@ namespace PeakSafeOptimizer.Infrastructure
 
         public PatchOutcome Outcome => Classify(Result);
 
+        /// <summary>
+        /// Complete mapping of every <see cref="PatchResult"/> onto the coarse category. All sixteen
+        /// values are named explicitly rather than folded into the <c>default</c> arm (which C#
+        /// requires anyway, since it does not treat an enum switch as exhaustive), so that a new
+        /// PatchResult is a visible gap in this table instead of being silently absorbed as a failure.
+        ///
+        /// Applied - and only Applied - means "this patch is live right now". Everything that leaves
+        /// the patch not running is Skipped unless the reason is our own fault, which is Failed:
+        ///
+        /// * <see cref="PatchResult.Applied"/>: Harmony.Patch succeeded and the record is live.
+        /// * <see cref="PatchResult.Uninstalled"/>: Skipped, not Applied. A successful uninstall is
+        ///   the opposite of applied, so counting it as applied printed "applied  : X uninstalled"
+        ///   and inflated AppliedCount. It is not a failure either, so Skipped is the honest bucket:
+        ///   "this patch is not running now". Only the hot-reload path can produce it (Install never
+        ///   uninstalls into the status it returns - group rollback uninstalls into a throwaway
+        ///   PatchStatus and reports SkippedGroupIncomplete or FailedUninstall instead), so the
+        ///   startup totals are unaffected by this classification. FormatReport prints it with its
+        ///   own "removed" prefix so the word matches the result.
+        /// * SkippedDisabled / SkippedNoDefinition / SkippedAlreadyInstalled / SkippedNotInstalled:
+        ///   nothing was attempted, and nothing is wrong. (SkippedAlreadyInstalled means the live
+        ///   record from a previous install still stands.)
+        /// * SkippedStructureMismatch / SkippedIlMismatch / SkippedUncertifiedBuild: the patch's own
+        ///   compatibility verdict about this game build. Warning-level, not error-level.
+        /// * SkippedGroupIncomplete: a sibling on the same switch could not install, so this member
+        ///   was withdrawn or never attempted. Not this member's fault, hence Skipped.
+        /// * FailedFactory / FailedInitialize / FailedResolve / FailedHarmonyMethod / FailedPatch /
+        ///   FailedUninstall: a plugin-side fault. The patch is still not live, but the log must be
+        ///   an error so it is not mistaken for a compatibility skip.
+        /// </summary>
         private static PatchOutcome Classify(PatchResult result)
         {
             switch (result)
             {
                 case PatchResult.Applied:
-                case PatchResult.Uninstalled:
                     return PatchOutcome.Applied;
+                case PatchResult.Uninstalled:
                 case PatchResult.SkippedDisabled:
                 case PatchResult.SkippedNoDefinition:
                 case PatchResult.SkippedAlreadyInstalled:
@@ -86,7 +123,16 @@ namespace PeakSafeOptimizer.Infrastructure
                 case PatchResult.SkippedUncertifiedBuild:
                 case PatchResult.SkippedGroupIncomplete:
                     return PatchOutcome.Skipped;
+                case PatchResult.FailedFactory:
+                case PatchResult.FailedInitialize:
+                case PatchResult.FailedResolve:
+                case PatchResult.FailedHarmonyMethod:
+                case PatchResult.FailedPatch:
+                case PatchResult.FailedUninstall:
+                    return PatchOutcome.Failed;
                 default:
+                    // Unreachable while the switch above is exhaustive. A new PatchResult that lands
+                    // here is treated as a failure on purpose: an unclassified result must be loud.
                     return PatchOutcome.Failed;
             }
         }
@@ -99,7 +145,6 @@ namespace PeakSafeOptimizer.Infrastructure
         private readonly List<PatchStatusEntry> _entries = new List<PatchStatusEntry>();
         private readonly List<ModuleDiscoveryFailure> _moduleFailures = new List<ModuleDiscoveryFailure>();
         public IReadOnlyList<PatchStatusEntry> Entries => _entries;
-        public IReadOnlyList<ModuleDiscoveryFailure> ModuleFailures => _moduleFailures;
 
         /// <summary>
         /// "certified" when the game assembly MVID equals the audited one, "structural-validation"
@@ -117,6 +162,12 @@ namespace PeakSafeOptimizer.Infrastructure
         /// Replaces the first entry with this name, or appends when there is none. Used by group
         /// rollback: a patch that installed and was then withdrawn because a sibling failed must be
         /// reported once, as withdrawn, rather than twice with contradictory results.
+        ///
+        /// Premise: within one PatchStatus a given name appears at most once, so "the first" is "the
+        /// only one". Install guarantees it with its `handled` set and Toggle walks a single group. A
+        /// group resolver that returned a duplicated id would break the premise, and then this method
+        /// and PatchInstaller.FindReason (which reads the *last* match) would act on different
+        /// entries, leaving one rewritten entry plus one stale contradictory one.
         /// </summary>
         internal void Replace(string name, PatchStatusEntry entry)
         {
@@ -161,13 +212,23 @@ namespace PeakSafeOptimizer.Infrastructure
                     : "mode meaning: MVID is unknown (game update or different build). Structural guards still " +
                       "validate independently; behavior-replacement patches requiring the audited build skip safely.")
             };
+            // `skipped` is the coarse Skipped bucket, which also holds Uninstalled entries. On the
+            // startup path there are none (Install never uninstalls into the status it returns), so
+            // the documented startup totals are exactly registered/enabled/applied/skipped/failed of
+            // install decisions. FormatReport is only called from startup; hot reload logs per entry.
             lines.Add(Line($"totals: registered={_entries.Count}, enabled={enabled}, applied={applied}, " +
                            $"skipped={skipped}, failed={failed}, module-failures={_moduleFailures.Count}"));
 
             foreach (PatchStatusEntry entry in _entries.Where(x => x.Outcome == PatchOutcome.Applied))
                 lines.Add(Line($"applied  : {entry.Name} [{Describe(entry.Compatibility)}] {entry.Reason}"));
             foreach (PatchStatusEntry entry in _entries.Where(x => x.Outcome == PatchOutcome.Skipped))
-                lines.Add(Line($"skipped  : {entry.Name} [{Describe(entry.Compatibility)}] {entry.Result}: {entry.Reason}"));
+            {
+                // Uninstalled shares the Skipped bucket (see PatchStatusEntry.Classify) but is not a
+                // skip: the patch ran and was then removed. It gets its own word so the line never
+                // claims the patch was never attempted. Only hot reload produces it.
+                string prefix = entry.Result == PatchResult.Uninstalled ? "removed  " : "skipped  ";
+                lines.Add(Line($"{prefix}: {entry.Name} [{Describe(entry.Compatibility)}] {entry.Result}: {entry.Reason}"));
+            }
             foreach (PatchStatusEntry entry in _entries.Where(x => x.Outcome == PatchOutcome.Failed))
                 lines.Add(Line($"failed   : {entry.Name} [{Describe(entry.Compatibility)}] {entry.Result}: {entry.Reason}"));
             foreach (ModuleDiscoveryFailure failure in _moduleFailures)
@@ -178,19 +239,6 @@ namespace PeakSafeOptimizer.Infrastructure
                            $"{skipped} skipped, {failed} failed, {applied} live."));
             lines.Add(Line("report end"));
             return lines;
-        }
-
-        /// <summary>
-        /// Single-line variant, retained for compact contexts such as hot-reload traces.
-        /// </summary>
-        public string FormatSummary()
-        {
-            int enabled = _entries.Count(x => x.Enabled);
-            string details = string.Join("; ", _entries.Select(x => $"{x.Name}={x.Result} ({x.Reason})"));
-            string moduleDetails = string.Join("; ", _moduleFailures.Select(x => $"{x.Module}=Failed ({x.Reason})"));
-            string modules = _moduleFailures.Count == 0 ? "" : $" Module failures={_moduleFailures.Count}: {moduleDetails}.";
-            return $"Patch status ({CompatibilityMode}): enabled={enabled}, applied={AppliedCount}, " +
-                   $"skipped={SkippedCount}, failed={FailedCount}. {details}.{modules}";
         }
 
         private static string Line(string body) => $"{LogPrefix} | {body}";

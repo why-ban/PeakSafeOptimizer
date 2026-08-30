@@ -33,6 +33,12 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// A non-positive/NaN raySpacing, a null lightmap, a NaN coordinate or a coordinate outside the
     /// int range all defer to the untouched original, which keeps its own value and its own
     /// exception behavior.
+    ///
+    /// Allocation free on every path. The Prefix and the Postfix each derive the voxel key from the
+    /// same <c>worldPos</c> through the same pure <see cref="TryResolve"/> instead of passing a
+    /// carrier object through <c>__state</c>, so a cache miss costs a handful of float operations and
+    /// one <c>long</c> pack rather than a gen-0 object. See the Postfix for why the two derivations
+    /// cannot disagree.
     /// </summary>
     internal static class LightVolumeSampleCachePatch
     {
@@ -45,11 +51,6 @@ namespace PeakSafeOptimizer.Patches.Scale
         /// exists so a fast-moving caller cannot grow the dictionary without bound.
         /// </summary>
         private const int MaxEntries = 1024;
-
-        internal sealed class PendingKey
-        {
-            internal long Key;
-        }
 
         private static Func<object, Vector3> _gridOffset;
         private static Func<object, float> _raySpacing;
@@ -64,6 +65,18 @@ namespace PeakSafeOptimizer.Patches.Scale
         {
             MethodInfo target = ResolveAndValidateTarget();
             Type lightVolume = target.DeclaringType;
+
+            // Both the Prefix and the Postfix receive the sampler's own first argument by name, which
+            // is how the Postfix can re-derive the voxel key without a carrier object. Harmony matches
+            // that parameter by name, so the name is a structural dependency of this patch and is
+            // asserted here rather than left to fail at Patch time.
+            ParameterInfo[] targetParameters = target.GetParameters();
+            if (targetParameters.Length != 2 ||
+                !string.Equals(targetParameters[0].Name, "worldPos", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "LightVolume.SamplePositionAlpha no longer takes a first parameter named worldPos");
+            }
 
             FieldInfo gridOffsetField = ScaleValidation.RequireInstanceField(
                 lightVolume, "gridOffset", typeof(Vector3));
@@ -150,42 +163,21 @@ namespace PeakSafeOptimizer.Patches.Scale
         /// <summary>
         /// No diagnostics: every branch here is reachable on every call, so accounting would cost
         /// more than the texture read this removes.
+        ///
+        /// Allocation free, including on a cache miss. There is no <c>__state</c> object: the Postfix
+        /// re-derives the same voxel key from the same <c>worldPos</c> through the same pure
+        /// <see cref="TryResolve"/>, so nothing has to be carried across the call. See the Postfix for
+        /// why that re-derivation is guaranteed to agree with this one.
         /// </summary>
-        internal static bool Prefix(object __instance, Vector3 worldPos, ref float __result, ref PendingKey __state)
+        internal static bool Prefix(object __instance, Vector3 worldPos, ref float __result)
         {
-            __state = null;
-
-            Func<object, Vector3> gridOffset = _gridOffset;
-            Func<object, float> raySpacing = _raySpacing;
-            Func<object, UnityEngine.Object> lightmap = _lightmap;
-            Func<UnityEngine.Object, uint> updateCount = _updateCount;
             Dictionary<long, float> cache = _cache;
-            if (gridOffset == null || raySpacing == null || lightmap == null ||
-                updateCount == null || cache == null || __instance == null)
-            {
-                return true;
-            }
-
-            float spacing = raySpacing(__instance);
-            if (!(spacing > 0f) || float.IsInfinity(spacing))
+            if (cache == null)
                 return true;
 
-            UnityEngine.Object texture = lightmap(__instance);
-            if (texture == null)
-            {
-                // The original throws here (or inside a non-readable GetPixel); preserve that.
+            if (!TryResolve(__instance, worldPos, out long key, out int textureId, out uint version))
                 return true;
-            }
 
-            Vector3 coords = (worldPos - gridOffset(__instance)) / spacing + 0.5f * Vector3.one;
-            if (!TryTruncate(coords.x, out int x) || !TryTruncate(coords.y, out int y) ||
-                !TryTruncate(coords.z, out int z))
-            {
-                return true;
-            }
-
-            int textureId = texture.GetInstanceID();
-            uint version = updateCount(texture);
             if (!_hasGeneration || _generationTextureId != textureId || _generationUpdateCount != version)
             {
                 cache.Clear();
@@ -194,7 +186,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 _hasGeneration = true;
             }
 
-            long key = PackKey(x, y, z);
             if (cache.TryGetValue(key, out float cached))
             {
                 __result = cached;
@@ -204,18 +195,111 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (cache.Count >= MaxEntries)
                 cache.Clear();
 
-            __state = new PendingKey { Key = key };
             return true;
         }
 
-        internal static void Postfix(float __result, PendingKey __state, bool __runOriginal)
+        /// <summary>
+        /// Files the value the original just read under its voxel key. The key is recomputed here
+        /// rather than handed over from the Prefix, which is what makes this patch allocation free on
+        /// a cache miss as well as on a hit.
+        ///
+        /// Why recomputing is exact. <see cref="TryResolve"/> is a pure function of
+        /// (<paramref name="__instance"/>, <paramref name="worldPos"/>) plus this class's own
+        /// accessor delegates, and none of its three inputs can move between the Prefix and here:
+        ///   * <paramref name="worldPos"/> is never assigned by the original. The whole audited body
+        ///     is <c>return SamplePosition(worldPos, printDebug).a;</c> (LightVolume.cs:675-678) into
+        ///     <c>WorldPosToLightmapCoords(worldPos)</c> plus one
+        ///     <c>lightMapData.Uncompressed.GetPixel(...)</c> (LightVolume.cs:661-665, :651-654).
+        ///   * <c>gridOffset</c> and <c>raySpacing</c> are only written by LoadLightMapData
+        ///     (LightVolume.cs:124), SetSize (:236) and the bake path (:531). None of those is on the
+        ///     sampler's call graph - the sampler reads three fields and calls one native texture
+        ///     getter, and <c>Texture3D.GetPixel</c> is an <c>isReadable</c> test plus
+        ///     <c>GetPixelImpl</c> (Texture3D.cs:393-400), i.e. a read.
+        ///   * The generation stamp likewise cannot advance: only <c>Apply()</c> or a replaced
+        ///     Texture3D moves it, and both live in CompressableLightMap's constructor and Decompress
+        ///     (CompressableLightMap.cs:72-76, :132-134), neither of which the sampler reaches.
+        /// The generation is nevertheless re-verified below rather than assumed, because a third-party
+        /// Postfix ordered before this one is outside that argument. A mismatch means the whole cache
+        /// belongs to a different bake, so the value is dropped instead of filed - the Prefix owns
+        /// clearing, this method never does.
+        ///
+        /// The re-derivation also removes the re-entrancy hazard a shared carrier would have had:
+        /// each invocation computes its own key from its own argument, so a nested call (another
+        /// plugin prefixing SamplePosition, say) cannot file the inner sample under the outer key.
+        ///
+        /// <paramref name="__runOriginal"/> stays load bearing and now covers two cases rather than
+        /// one. A prefix in the chain that suppressed the original - including this patch's own cache
+        /// hit, which returns false - leaves <c>__result</c> holding a value that never came from a
+        /// Texture3D read, and caching that would publish a foreign alpha under a voxel key and keep
+        /// serving it until the next rebake.
+        /// </summary>
+        internal static void Postfix(object __instance, Vector3 worldPos, float __result, bool __runOriginal)
         {
-            if (!__runOriginal || __state == null)
+            if (!__runOriginal)
                 return;
             Dictionary<long, float> cache = _cache;
             if (cache == null)
                 return;
-            cache[__state.Key] = __result;
+
+            if (!TryResolve(__instance, worldPos, out long key, out int textureId, out uint version))
+                return;
+            if (!_hasGeneration || _generationTextureId != textureId || _generationUpdateCount != version)
+                return;
+
+            cache[key] = __result;
+        }
+
+        /// <summary>
+        /// Resolves one call's voxel key plus the generation stamp of the lightmap it would be read
+        /// from. Pure: it reads three LightVolume members through the cached accessors and writes
+        /// nothing, which is the property that lets the Prefix and the Postfix derive the same key
+        /// independently.
+        ///
+        /// Returns false for exactly the inputs the Prefix defers to the original on - a missing
+        /// accessor, a non-positive or infinite raySpacing, a null lightmap, or a coordinate outside
+        /// the range where the audited <c>(int)</c> cast is defined. Because the test is a pure
+        /// function, the Postfix reaching false is the same information as the Prefix having reserved
+        /// no key, so no flag has to travel between them.
+        /// </summary>
+        private static bool TryResolve(
+            object instance, Vector3 worldPos, out long key, out int textureId, out uint version)
+        {
+            key = 0L;
+            textureId = 0;
+            version = 0u;
+
+            Func<object, Vector3> gridOffset = _gridOffset;
+            Func<object, float> raySpacing = _raySpacing;
+            Func<object, UnityEngine.Object> lightmap = _lightmap;
+            Func<UnityEngine.Object, uint> updateCount = _updateCount;
+            if (gridOffset == null || raySpacing == null || lightmap == null ||
+                updateCount == null || instance == null)
+            {
+                return false;
+            }
+
+            float spacing = raySpacing(instance);
+            if (!(spacing > 0f) || float.IsInfinity(spacing))
+                return false;
+
+            UnityEngine.Object texture = lightmap(instance);
+            if (texture == null)
+            {
+                // The original throws here (or inside a non-readable GetPixel); preserve that.
+                return false;
+            }
+
+            Vector3 coords = (worldPos - gridOffset(instance)) / spacing + 0.5f * Vector3.one;
+            if (!TryTruncate(coords.x, out int x) || !TryTruncate(coords.y, out int y) ||
+                !TryTruncate(coords.z, out int z))
+            {
+                return false;
+            }
+
+            textureId = texture.GetInstanceID();
+            version = updateCount(texture);
+            key = PackKey(x, y, z);
+            return true;
         }
 
         /// <summary>

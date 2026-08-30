@@ -65,9 +65,18 @@ namespace PeakSafeOptimizer.Patches.Stability
         {
             ResolveAndValidateTarget();
 
+            // Hand-rolled because StabilityPatchValidation has no static-field helper. Checks match
+            // Patches\Scale\ScaleValidation.RequireStaticField (:105-113): DeclaredOnly in the binding
+            // flags plus an explicit DeclaringType test, so a same-named static inherited from a
+            // future base class cannot satisfy this. Public-only rather than that helper's
+            // Public|NonPublic, and deliberately so: the Prefix reads the field through directly
+            // compiled access, which a demoted field would no longer permit. Verified declared on
+            // Character itself (Character.cs:117).
             FieldInfo localCharacterField = typeof(Character).GetField(
-                "localCharacter", BindingFlags.Static | BindingFlags.Public);
+                "localCharacter",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.DeclaredOnly);
             if (localCharacterField == null || !localCharacterField.IsStatic ||
+                localCharacterField.DeclaringType != typeof(Character) ||
                 localCharacterField.FieldType != typeof(Character))
             {
                 throw new InvalidOperationException("Character.localCharacter failed structural self-check");

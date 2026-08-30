@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
-using PeakSafeOptimizer.Config;
 using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
 using Photon.Pun;
@@ -37,13 +36,47 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// untouched, and a non-owned tumbleweed still does nothing (the audited IsMine gate is
     /// reproduced). The scan itself also switches to squared distance, which is exact for the audited
     /// `num2 &lt; num` comparison over non-negative distances.
+    ///
+    /// Declared default-on exception (the second one in this project, after ExplosionScale): this
+    /// patch is NOT behaviourally equivalent and is still enabled by default.
+    ///
+    /// What is given up, stated exactly: the target solve is a time approximation. Between two solves
+    /// the tumbleweed keeps steering towards the previously chosen character, so a newly appearing
+    /// closer or better-angled target is adopted at the next solve instead of immediately - at worst
+    /// <see cref="Interval"/> physics ticks later when it appears just after a solve, i.e. 5 ticks or
+    /// 0.1s at the game's default 50Hz fixed step. Vanilla re-picks every tick (TumbleWeed.cs:40).
+    /// Nothing else changes: the same magnitude of force is applied on every tick (TumbleWeed.cs:45),
+    /// and the scan predicate, the 300f bound and the maxAngle gate are the audited ones
+    /// (TumbleWeed.cs:49-66).
+    ///
+    /// Why the 0.1s of target lag is judged acceptable enough to ship on:
+    ///   1. The direction is recomputed every tick from the cached target's *current* Center (the
+    ///      Prefix reads resolved.Center on each call, not a stored position), so a cached target that
+    ///      keeps moving still steers the tumbleweed continuously. The lag applies to *which*
+    ///      character is chased, never to the tracking of the one being chased.
+    ///   2. A cached target that was destroyed, whose data is gone, or that is dead forces a rescan on
+    ///      the very next tick rather than waiting out the interval (the cache-validity test in the
+    ///      Prefix). Note this is cache invalidation only: the rescan uses the audited predicate,
+    ///      which does not filter dead characters either, so no vanilla choice is suppressed.
+    ///   3. A tumbleweed is a rolling hazard reacting to a whole roster, not an aimed attack, and the
+    ///      chosen target only sets an acceleration direction. 0.1s of acceleration towards the
+    ///      previous target is a fraction of a roll and is not a hit-or-miss decision.
+    ///   4. Exposure is narrow: tumbleweeds only exist where the levels place them (the desert / mesa
+    ///      biome). That is an asset placement fact taken from the audit, not something this revision
+    ///      re-verified from the decompiled source - TumbleWeed is referenced nowhere else in
+    ///      Assembly-CSharp, so spawning is entirely asset-driven and would change if a level were
+    ///      re-authored.
+    /// The cost this buys is the removal of an O(tumbleweeds x players) angle+distance scan at 50Hz on
+    /// exactly the map where the framerate was reported as bad. Whoever prefers strict equivalence can
+    /// turn the entry off; the switch is independent.
     /// </summary>
     internal static class TumbleWeedTargetScanPatch
     {
         /// <summary>
         /// A tumbleweed re-solves its chase target once every this many physics ticks and reuses the
         /// previous one in between. Force is still applied every tick, and its direction is recomputed
-        /// from the cached target's current Center, so 5 ticks (0.1s) costs no visible responsiveness.
+        /// from the cached target's current Center, so the only thing 5 ticks (0.1s) can delay is a
+        /// switch to a different target - see the declared default-on exception on the type.
         /// </summary>
         private const int Interval = 5;
         private const float MaxScanDistance = 300f;

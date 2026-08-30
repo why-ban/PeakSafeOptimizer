@@ -41,8 +41,13 @@ namespace PeakSafeOptimizer.Diagnostics
                 _log?.LogInfo($"Repair reason '{reason}' first hit");
                 return;
             }
-            // Steady state with DetailedLogging off: dictionary lookup + Interlocked.Increment only.
-            // No DateTime.UtcNow read, no formatting, no allocation.
+            // Two steady states. With DetailedLogging on - which is the default (OptimizerConfig.cs:370
+            // binds it to true) and what the test machines run - every hit past the first also pays a
+            // DateTime.UtcNow read, an Interlocked.Read and a subtraction before deciding to say
+            // nothing; only the 30 s winner formats or allocates. With it off, a hit is a dictionary
+            // lookup plus an Interlocked.Increment and nothing else. Either way GetOrAdd's factory is a
+            // non-capturing lambda, which Roslyn caches in a static field, so it allocates no closure
+            // and no delegate per call - do not turn it into a capturing one.
             if (!(_detailed?.Value ?? false))
                 return;
 

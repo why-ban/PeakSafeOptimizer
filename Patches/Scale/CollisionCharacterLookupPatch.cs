@@ -2,7 +2,6 @@ using System;
 using System.Reflection;
 using System.Reflection.Emit;
 using HarmonyLib;
-using UnityEngine;
 
 namespace PeakSafeOptimizer.Patches.Scale
 {

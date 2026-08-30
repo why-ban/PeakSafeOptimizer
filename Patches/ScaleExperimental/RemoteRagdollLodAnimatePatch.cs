@@ -1,4 +1,3 @@
-using System;
 using System.Reflection;
 using HarmonyLib;
 using PeakSafeOptimizer.Patches.Scale;
@@ -35,6 +34,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         internal static void Initialize()
         {
             ResolveAndValidateTarget();
+            // Acquire is the last statement here that can throw - it runs
+            // RemoteRagdollLod.ValidateStructure and builds the shared accessors - and the only thing
+            // after it is a plain bool assignment. This patch holds no accessors of its own, so there
+            // is nothing else to order.
             RemoteRagdollLod.Acquire();
             _acquired = true;
         }

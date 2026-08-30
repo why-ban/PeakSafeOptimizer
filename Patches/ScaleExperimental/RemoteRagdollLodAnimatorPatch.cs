@@ -1,6 +1,5 @@
 using System;
 using System.Reflection;
-using System.Reflection.Emit;
 using HarmonyLib;
 using PeakSafeOptimizer.Diagnostics;
 using PeakSafeOptimizer.Patches.Scale;
@@ -9,10 +8,18 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Opt-in: skips CharacterAnimations.Update() (audited source CharacterAnimations.cs:160-286)
-    /// for a distant remote character selected by <see cref="RemoteRagdollLod.ShouldDowngrade"/>.
-    /// The method writes roughly thirty Animator parameters per character per frame plus a
-    /// Matrix4x4 look computation, and every one of those writes only feeds the animation pose.
+    /// Opt-in: replaces CharacterAnimations.Update() (audited source CharacterAnimations.cs:160-286)
+    /// with a reduced body for a distant remote character selected by
+    /// <see cref="RemoteRagdollLod.ShouldDowngrade"/>. Not a skip, which is what this said before and
+    /// what the other three patches of the lane really do: the tail of the Prefix below, after the
+    /// ShouldDowngrade test, *is* the reduced body. What it keeps is everything that is not a pose
+    /// parameter - the animation helper transform write, SetAnimSpeed, the throwTime and
+    /// sinceEmoteStart timers, the emote-cancel condition, the InWater parameter and the
+    /// myersDistance / inWater resets. What it drops is the ~30 other Animator parameter writes and
+    /// the Matrix4x4 look computation (CharacterAnimations.cs:201-209), all of which only feed the
+    /// animation pose. Keeping the two timers is not cosmetic bookkeeping: they are what make the
+    /// Prefix have to honour __runOriginal, because running the body twice in one frame would
+    /// double-advance them.
     ///
     /// Why no physics can break: this method applies no force and moves no Rigidbody. Its only
     /// non-Animator writes are helper-transform and bookkeeping values:
@@ -20,24 +27,59 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///     Action_Torch's particle simulation space)
     ///   throwTime countdown, data.myersDistance reset to 1000f, data.inWater reset to 1f
     /// None of these is read by a force path. data.myersDistance and data.inWater are only consumed
-    /// as Animator parameters (CharacterAnimations.cs:249 and :284), so leaving them stale for a
-    /// distant character has no gameplay effect on this client.
+    /// as Animator parameters - myersDistance at CharacterAnimations.cs:249, inWater at :254
+    /// (AN_FLOOR_LEAN_FORWARD, as 1f - inWater) and at :284 (AN_INWATER) - so leaving them stale for
+    /// a distant character has no gameplay effect on this client.
     ///
-    /// Two effects are accepted by design, both cosmetic and both on a character that is at least
-    /// the configured enter distance away: its Animator parameters freeze at their last values, and
-    /// data.isInWater (which reads back the InWater Animator parameter) can lag, which can make its
-    /// distant footstep/water SFX variant stale. HandleIK is additionally called every frame from
-    /// CharacterAnimations.LateUpdate (CharacterAnimations.cs:335-338), which is not patched, so IK
-    /// weights keep being maintained even while Update is skipped.
+    /// The accepted cost is cosmetic and only on a character that is at least the configured enter
+    /// distance away: its Animator parameters freeze at their last values. data.isInWater is
+    /// explicitly *not* affected. It reads the InWater parameter back off the Animator
+    /// (CharacterData.cs:286, animator.GetFloat(AN_INWATER) &lt; 0.9f) and the replacement below still
+    /// writes that one parameter, so both of its consumers - FootStepPlayer.PlayStep
+    /// (FootStepPlayer.cs:96) and Peak.WaterSFX.OnEnable (Peak\WaterSFX.cs:13) - keep seeing the
+    /// correct value and the footstep/water SFX variant stays right. HandleIK is additionally called
+    /// every frame from CharacterAnimations.LateUpdate (CharacterAnimations.cs:335-338), which is not
+    /// patched, so IK weights keep being maintained even though the reduced body does not call it
+    /// (the original does, at CharacterAnimations.cs:269).
+    ///
+    /// Beyond the parameter writes, two control-flow blocks of the original are also dropped:
+    ///   * The headBob check (CharacterAnimations.cs:163-168). Omitting it is strictly equivalent,
+    ///     not merely tolerable: the only thing it can reach is UpdateHeadBob, whose entire body
+    ///     sits behind `if (character == Character.localCharacter)` (CharacterAnimations.cs:152-158),
+    ///     and a downgraded character is by construction never the local one (RemoteRagdollLod.cs:717
+    ///     is the first entry of the fallback list). The flag it maintains, _headBobRemoved, has no
+    ///     consumer outside that same block (CharacterAnimations.cs:164), so leaving it stale is not
+    ///     observable either.
+    ///   * The runtimeAnimatorController change detection plus CacheAnimatorHashes()
+    ///     (CharacterAnimations.cs:169-173). While downgraded, a controller swapped in without
+    ///     SetAnimatorController is not noticed, so _animatorHashes can go stale and the vanilla
+    ///     warning is not logged. This is self-healing - the check resumes as soon as the character
+    ///     comes back inside the exit distance - and harmless in the meantime, because the only
+    ///     consumer of _animatorHashes is the AN_VINE_SLIDE guard at CharacterAnimations.cs:235,
+    ///     which lives inside the very run of parameter writes the reduced body drops.
+    ///
+    /// One frozen parameter deserves naming separately. The replacement consumes and discards
+    /// data.myersDistance: it resets the field to 1000f exactly as the original does at
+    /// CharacterAnimations.cs:250, but it does not first write AN_MYERS_DISTANCE (the original's
+    /// write-then-reset pair is :249 followed by :250). So a downgraded remote player that the
+    /// Scoutmaster is currently targeting will not play the corresponding animation. That is
+    /// ordinary parameter freezing, but it is the one frozen parameter whose input is written every
+    /// frame by a third party rather than derived from the character's own state: Scoutmaster
+    /// .DoVisuals assigns currentTarget.data.myersDistance at Scoutmaster.cs:239, reached from
+    /// Scoutmaster.Update at :272 on every client.
+    ///
+    /// Accessors: every Animator member the replacement needs (the CharacterRefs.animator field,
+    /// StringToHash, SetBool(int, bool), SetFloat(int, float)) is public and lives in
+    /// UnityEngine.AnimationModule, which this project references, so they are all called directly
+    /// at compile time. Initialize still asserts their exact runtime shape - including the parameter
+    /// types that pin down which SetFloat/SetBool overload is meant - so a game update that moves,
+    /// renames or re-overloads them fails this patch closed instead of throwing in the hot path.
     /// </summary>
     internal static class RemoteRagdollLodAnimatorPatch
     {
         private static AccessTools.FieldRef<CharacterAnimations, Character> _character;
         private static AccessTools.FieldRef<CharacterAnimations, bool> _emoting;
         private static AccessTools.FieldRef<CharacterAnimations, float> _sinceEmoteStart;
-        private static Func<Character.CharacterRefs, UnityEngine.Object> _getAnimator;
-        private static Action<UnityEngine.Object, int, bool> _setBool;
-        private static Action<UnityEngine.Object, int, float> _setFloat;
         private static Action<CharacterAnimations> _setAnimSpeed;
         private static int _emoteHash;
         private static int _inWaterHash;
@@ -53,8 +95,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(CharacterAnimations), "emoting", typeof(bool));
             FieldInfo sinceEmoteStartField = ScaleValidation.RequireInstanceField(
                 typeof(CharacterAnimations), "sinceEmoteStart", typeof(float));
-            FieldInfo animatorField = ScaleValidation.RequireInstanceFieldByTypeName(
-                typeof(Character.CharacterRefs), "animator", "UnityEngine.Animator");
+            ScaleValidation.RequireInstanceField(
+                typeof(Character.CharacterRefs), "animator", typeof(Animator));
+            // The three Animator entry points the replacement calls directly. The parameter type
+            // arrays are what pin the overload: Animator declares SetFloat(int, float),
+            // SetFloat(int, float, float, float), SetFloat(string, float) and
+            // SetFloat(string, float, float, float) (Animator.cs:933-951) and the matching pair of
+            // SetBool overloads (:963-971), and the replacement must keep using the id/value ones.
+            ScaleValidation.RequireStaticMethod(
+                typeof(Animator), "StringToHash", typeof(int), new[] { typeof(string) }, requirePublic: true);
+            ScaleValidation.RequireInstanceMethod(
+                typeof(Animator), "SetBool", typeof(void), new[] { typeof(int), typeof(bool) },
+                requirePublic: true);
+            ScaleValidation.RequireInstanceMethod(
+                typeof(Animator), "SetFloat", typeof(void), new[] { typeof(int), typeof(float) },
+                requirePublic: true);
             ScaleValidation.RequireInstanceField(typeof(Character), "data", typeof(CharacterData));
             ScaleValidation.RequireInstanceField(typeof(Character), "input", typeof(CharacterInput));
             ScaleValidation.RequireInstanceField(typeof(Character), "refs", typeof(Character.CharacterRefs));
@@ -85,43 +140,33 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 AccessTools.FieldRefAccess<CharacterAnimations, bool>(emotingField);
             AccessTools.FieldRef<CharacterAnimations, float> sinceEmoteStart =
                 AccessTools.FieldRefAccess<CharacterAnimations, float>(sinceEmoteStartField);
-            Func<Character.CharacterRefs, UnityEngine.Object> getAnimator =
-                ScaleEmit.CreateUnityObjectFieldGetter<Character.CharacterRefs>(animatorField);
-            Type animatorType = animatorField.FieldType;
-            MethodInfo stringToHash = animatorType.GetMethod(
-                "StringToHash", BindingFlags.Public | BindingFlags.Static, null,
-                new[] { typeof(string) }, null);
-            MethodInfo setBool = animatorType.GetMethod(
-                "SetBool", BindingFlags.Public | BindingFlags.Instance, null,
-                new[] { typeof(int), typeof(bool) }, null);
-            MethodInfo setFloat = animatorType.GetMethod(
-                "SetFloat", BindingFlags.Public | BindingFlags.Instance, null,
-                new[] { typeof(int), typeof(float) }, null);
-            if (stringToHash == null || setBool == null || setFloat == null)
-                throw new MissingMethodException("UnityEngine.Animator", "hash/set accessors");
-            Func<string, int> hash = (Func<string, int>)stringToHash.CreateDelegate(typeof(Func<string, int>));
-            Action<UnityEngine.Object, int, bool> setBoolDelegate =
-                EmitSetBool(animatorType, setBool);
-            Action<UnityEngine.Object, int, float> setFloatDelegate =
-                EmitSetFloat(animatorType, setFloat);
             Action<CharacterAnimations> setAnimSpeed =
                 ScaleExperimentalEmit.CreateDelegate<Action<CharacterAnimations>>(setAnimSpeedMethod);
-            if (character == null || emoting == null || sinceEmoteStart == null || getAnimator == null ||
-                setBoolDelegate == null || setFloatDelegate == null || setAnimSpeed == null)
+            if (character == null || emoting == null || sinceEmoteStart == null || setAnimSpeed == null)
                 throw new InvalidOperationException("RemoteRagdollLodAnimator FieldRef creation failed");
 
-            // Acquired last so a failed Initialize never leaves a reference on the shared helper.
+            // Hashed before Acquire, not after. Animator.StringToHash marshals the string and calls
+            // straight into native code (Animator.cs:1981-2002, forwarding to the extern
+            // StringToHash_Injected at :2938), so it is a statement that can throw and therefore has
+            // to sit on the near side of the shared helper's reference count. The previous order put
+            // these two lines after Acquire under a comment claiming nothing below it could throw,
+            // which was wrong; it only happened to be harmless because this patch registers a Reset
+            // and that Reset releases whenever _acquired is set.
+            int emoteHash = Animator.StringToHash("Emote");
+            int inWaterHash = Animator.StringToHash("InWater");
+
+            // Acquired last: it is now genuinely the final statement here that can throw (it runs
+            // RemoteRagdollLod.ValidateStructure and builds the shared accessors), so a failed
+            // Initialize never leaves a reference on the shared helper. Everything below is a plain
+            // field assignment.
             RemoteRagdollLod.Acquire();
             _acquired = true;
             _character = character;
             _emoting = emoting;
             _sinceEmoteStart = sinceEmoteStart;
-            _getAnimator = getAnimator;
-            _setBool = setBoolDelegate;
-            _setFloat = setFloatDelegate;
             _setAnimSpeed = setAnimSpeed;
-            _emoteHash = hash("Emote");
-            _inWaterHash = hash("InWater");
+            _emoteHash = emoteHash;
+            _inWaterHash = inWaterHash;
         }
 
         internal static MethodInfo ResolveAndValidateTarget()
@@ -135,9 +180,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _character = null;
             _emoting = null;
             _sinceEmoteStart = null;
-            _getAnimator = null;
-            _setBool = null;
-            _setFloat = null;
             _setAnimSpeed = null;
             _emoteHash = 0;
             _inWaterHash = 0;
@@ -162,6 +204,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             AccessTools.FieldRef<CharacterAnimations, Character> characterRef = _character;
             if (characterRef == null)
             {
+                // Still reachable, and still means the same thing as before: the one remaining
+                // reflection-built accessor (the private CharacterAnimations.character FieldRef) is
+                // missing, so the Prefix cannot even identify the owner and hands the frame back to
+                // the original. The Animator accessors are no longer part of this condition because
+                // they are compile-time calls now.
                 RateLimitedDiagnostics.Hit("RemoteRagdollLodAnimator.accessor-unavailable");
                 return true;
             }
@@ -177,19 +224,24 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             CharacterData data = owner.data;
             Character.CharacterRefs refs = owner.refs;
-            Func<Character.CharacterRefs, UnityEngine.Object> getAnimator = _getAnimator;
-            Action<UnityEngine.Object, int, bool> setBool = _setBool;
-            Action<UnityEngine.Object, int, float> setFloat = _setFloat;
             Action<CharacterAnimations> setAnimSpeed = _setAnimSpeed;
             AccessTools.FieldRef<CharacterAnimations, bool> emotingRef = _emoting;
             AccessTools.FieldRef<CharacterAnimations, float> sinceEmoteStartRef = _sinceEmoteStart;
-            if (data == null || refs == null || refs.animationPositionTransform == null || getAnimator == null ||
-                setBool == null || setFloat == null || setAnimSpeed == null ||
-                emotingRef == null || sinceEmoteStartRef == null)
+            // refs is a plain [Serializable] managed class (Character.cs:17-18), not a
+            // UnityEngine.Object, and everything the original reads off it (Character.cs:44 etc.) is
+            // an ordinary field load, so a plain reference null check is both necessary and
+            // sufficient here.
+            if (data == null || refs == null || refs.animationPositionTransform == null ||
+                setAnimSpeed == null || emotingRef == null || sinceEmoteStartRef == null)
                 return true;
 
             Bodypart hip = refs.hip;
-            UnityEngine.Object animator = getAnimator(refs);
+            // animator derives from UnityEngine.Object, and every use of it - both the original's
+            // (animator.runtimeAnimatorController at CharacterAnimations.cs:169, the parameter writes
+            // at :176-284) and this replacement's SetBool/SetFloat - crosses into native code, which
+            // throws once the native side is gone. So this must use Unity's == semantics, which also
+            // rejects a destroyed-but-non-null wrapper, rather than a reference comparison.
+            Animator animator = refs.animator;
             if (hip == null || hip.transform == null || animator == null || owner.input == null)
                 return true;
 
@@ -207,52 +259,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                   (owner.input.movementInput.magnitude > 0.1f || owner.input.jumpWasPressed ||
                    data.sinceGrounded > 0.2f))))
             {
-                setBool(animator, _emoteHash, false);
+                animator.SetBool(_emoteHash, false);
                 emotingRef(__instance) = false;
             }
 
-            setFloat(animator, _inWaterHash, data.inWater);
+            animator.SetFloat(_inWaterHash, data.inWater);
             data.myersDistance = 1000f;
             data.inWater = 1f;
             return false;
-        }
-
-        private static Action<UnityEngine.Object, int, bool> EmitSetBool(Type animatorType, MethodInfo setter)
-        {
-            var method = new DynamicMethod(
-                "PSO_RemoteAnimatorSetBool",
-                typeof(void),
-                new[] { typeof(UnityEngine.Object), typeof(int), typeof(bool) },
-                typeof(RemoteRagdollLodAnimatorPatch).Module,
-                true);
-            ILGenerator il = method.GetILGenerator();
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Castclass, animatorType);
-            il.Emit(OpCodes.Ldarg_1);
-            il.Emit(OpCodes.Ldarg_2);
-            il.Emit(OpCodes.Callvirt, setter);
-            il.Emit(OpCodes.Ret);
-            return (Action<UnityEngine.Object, int, bool>)method.CreateDelegate(
-                typeof(Action<UnityEngine.Object, int, bool>));
-        }
-
-        private static Action<UnityEngine.Object, int, float> EmitSetFloat(Type animatorType, MethodInfo setter)
-        {
-            var method = new DynamicMethod(
-                "PSO_RemoteAnimatorSetFloat",
-                typeof(void),
-                new[] { typeof(UnityEngine.Object), typeof(int), typeof(float) },
-                typeof(RemoteRagdollLodAnimatorPatch).Module,
-                true);
-            ILGenerator il = method.GetILGenerator();
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Castclass, animatorType);
-            il.Emit(OpCodes.Ldarg_1);
-            il.Emit(OpCodes.Ldarg_2);
-            il.Emit(OpCodes.Callvirt, setter);
-            il.Emit(OpCodes.Ret);
-            return (Action<UnityEngine.Object, int, float>)method.CreateDelegate(
-                typeof(Action<UnityEngine.Object, int, float>));
         }
     }
 }

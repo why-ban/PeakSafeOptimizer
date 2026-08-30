@@ -6,8 +6,15 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Accessor factories for audited game members whose declared types live in
-    /// UnityEngine.PhysicsModule, which this project intentionally does not reference.
+    /// Accessor factories for audited game members that cannot be bound with plain
+    /// <c>typeof(...)</c> at compile time - either because the declaring or element type lives in an
+    /// assembly this project does not reference (Unity.Mathematics for ItemPhysicsSyncData.position,
+    /// and the enum parameter of Rigidbody.AddForce is resolved by name for the same reason), or
+    /// because the member is non-public. UnityEngine.PhysicsModule itself *is* referenced by the
+    /// csproj (PeakSafeOptimizer.csproj:44-47), so Rigidbody and Collider are available as types;
+    /// the by-name lookups that remain are kept deliberately, because UnityEngine.dll is a
+    /// type-forwarding facade and some modules are still unreferenced, and mixing the two styles is
+    /// harder to audit than using by-name consistently in this helper.
     /// Everything is emitted once during Initialize so hot paths stay allocation free and never
     /// use MethodInfo.Invoke.
     /// </summary>
@@ -46,8 +53,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
         /// <summary>
         /// Returns the Transform of the first element of a reference-typed array field, or null when
-        /// the array is null or empty. Used for members whose element type lives in an assembly this
-        /// project does not reference (for example UnityEngine.Collider).
+        /// the array is null or empty. Element type is taken from the FieldInfo rather than named at
+        /// compile time (for example UnityEngine.Collider), which keeps this helper usable for array
+        /// fields whose element type this project does not reference - see the by-name note on the
+        /// type.
         /// </summary>
         internal static Func<TInstance, Transform> CreateFirstElementTransformGetter<TInstance>(FieldInfo arrayField)
         {
@@ -220,48 +229,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(Func<UnityEngine.Object, Quaternion>));
         }
 
-        internal static Action<UnityEngine.Object, Vector3> CreateVector3Action(
-            Type declaringType,
-            MethodInfo target)
-        {
-            RequireInstanceVoid(declaringType, target, typeof(Vector3));
-            var method = new DynamicMethod(
-                "PSO_CallV3_" + target.Name,
-                typeof(void),
-                new[] { typeof(UnityEngine.Object), typeof(Vector3) },
-                typeof(ScaleExperimentalEmit).Module,
-                true);
-            ILGenerator il = method.GetILGenerator();
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Castclass, declaringType);
-            il.Emit(OpCodes.Ldarg_1);
-            il.Emit(OpCodes.Callvirt, target);
-            il.Emit(OpCodes.Ret);
-            return (Action<UnityEngine.Object, Vector3>)method.CreateDelegate(
-                typeof(Action<UnityEngine.Object, Vector3>));
-        }
-
-        internal static Action<UnityEngine.Object, Quaternion> CreateQuaternionAction(
-            Type declaringType,
-            MethodInfo target)
-        {
-            RequireInstanceVoid(declaringType, target, typeof(Quaternion));
-            var method = new DynamicMethod(
-                "PSO_CallQ_" + target.Name,
-                typeof(void),
-                new[] { typeof(UnityEngine.Object), typeof(Quaternion) },
-                typeof(ScaleExperimentalEmit).Module,
-                true);
-            ILGenerator il = method.GetILGenerator();
-            il.Emit(OpCodes.Ldarg_0);
-            il.Emit(OpCodes.Castclass, declaringType);
-            il.Emit(OpCodes.Ldarg_1);
-            il.Emit(OpCodes.Callvirt, target);
-            il.Emit(OpCodes.Ret);
-            return (Action<UnityEngine.Object, Quaternion>)method.CreateDelegate(
-                typeof(Action<UnityEngine.Object, Quaternion>));
-        }
-
         private static MethodInfo RequireGetter(Type declaringType, PropertyInfo property, Type expected)
         {
             if (declaringType == null) throw new ArgumentNullException(nameof(declaringType));
@@ -280,8 +247,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         }
 
         /// <summary>
-        /// Emits a call to an instance method taking (Vector3, intBackedEnum) on a type this project
-        /// cannot reference at compile time, for example Rigidbody.AddForce(Vector3, ForceMode).
+        /// Emits a call to an instance method taking (Vector3, intBackedEnum), resolving both the
+        /// declaring type and the enum by name rather than with typeof - see the by-name note on the
+        /// type. The single caller is Rigidbody.AddForce(Vector3, ForceMode).
         /// </summary>
         internal static Action<UnityEngine.Object, Vector3, int> CreateVector3EnumAction(
             Type declaringType, MethodInfo target)
@@ -318,22 +286,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             il.Emit(OpCodes.Ret);
             return (Action<UnityEngine.Object, Vector3, int>)method.CreateDelegate(
                 typeof(Action<UnityEngine.Object, Vector3, int>));
-        }
-
-        private static void RequireInstanceVoid(Type declaringType, MethodInfo target, Type parameterType)
-        {
-            if (declaringType == null) throw new ArgumentNullException(nameof(declaringType));
-            if (target == null) throw new ArgumentNullException(nameof(target));
-            if (target.DeclaringType != declaringType || target.IsStatic ||
-                target.ReturnType != typeof(void) || target.ContainsGenericParameters)
-            {
-                throw new InvalidOperationException($"Unexpected method structure: {target.Name}");
-            }
-            ParameterInfo[] parameters = target.GetParameters();
-            if (parameters.Length != 1 || parameters[0].ParameterType != parameterType)
-                throw new InvalidOperationException($"Unexpected parameter structure: {target.Name}");
-            if (!typeof(UnityEngine.Object).IsAssignableFrom(declaringType))
-                throw new InvalidOperationException($"{declaringType.FullName} is not a UnityEngine.Object");
         }
     }
 }

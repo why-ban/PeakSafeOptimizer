@@ -153,7 +153,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
-            RateLimitedDiagnostics.Hit("WeightRefreshCoalescing.same-frame-duplicate-skipped");
+            // Same frame, identical content signature: this is the patch working as designed, not a
+            // repair and not a fallback. RateLimitedDiagnostics is deliberately not used here -
+            // diagnostics are reserved for repairs and fallbacks (the ban is spelled out in
+            // DetailBodypartThrottlePatch.cs:198-203), and counting a successful coalesce as a
+            // "repair reason" would pollute the counters used as evidence of vanilla faults.
             return false;
         }
 

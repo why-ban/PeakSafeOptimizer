@@ -10,7 +10,7 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// <summary>
     /// Full equivalent replacement of CharacterMovement.OnCollision(Collision, bool, Bodypart)
     /// (audited source CharacterMovement.cs:923-957). The original evaluates the
-    /// <c>Collision.contacts</c> property seven times (:928, :948, twice each at :953 and :955); this
+    /// <c>Collision.contacts</c> property six times (:928, :948, twice each at :953 and :955); this
     /// version reads contact 0 exactly once through <c>Collision.GetContact(0)</c>.
     ///
     /// Why that is bit-identical: <c>GetContact</c> (Collision.cs:104-117) returns

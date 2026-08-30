@@ -22,11 +22,22 @@ namespace PeakSafeOptimizer.Graphics
     /// who changes graphics quality while the lane is off is not sent back to an older value when it
     /// is turned on again.
     ///
-    /// There is no game code to fight over this particular setting (nothing in Assembly-CSharp writes
-    /// skinWeights; it only writes vSyncCount, globalTextureMipmapLimit, lodBias and pixelLightCount),
-    /// but QualitySettings does have per-frame writers - URP rewrites antiAliasing from the pipeline
-    /// asset every frame (UniversalRenderPipeline.cs:321-323) - so the periodic reassert is kept
-    /// against the quality-level machinery resetting QualitySettings wholesale.
+    /// Nothing in the shipped game or in URP competes for this particular setting. A sweep of the
+    /// decompiled assemblies finds zero writes to skinWeights anywhere: Assembly-CSharp only writes
+    /// vSyncCount (VSyncSetting.cs:16), globalTextureMipmapLimit (TextureQualitySetting.cs:23-32),
+    /// lodBias (LodQuality.cs:17) and pixelLightCount (MirrorReflection.cs:40/65,
+    /// MirrorCameraScript.cs:124/180). Nor does anything switch quality level: SetQualityLevel has no
+    /// caller outside QualitySettings itself. URP does write QualitySettings, but from its
+    /// constructor only - antiAliasing at UniversalRenderPipeline.cs:321-323 and enableLODCrossFade
+    /// at :336 are both inside the ctor that starts at :310, not on any per-frame path.
+    ///
+    /// The periodic reassert therefore has no known adversary. It is kept as cheap insurance against
+    /// the two writers that cannot be ruled out from the decompiled source: another mod calling the
+    /// public QualitySettings.SetQualityLevel - directly, or via QualitySettings.ForEach, which
+    /// restores the level through it (QualitySettings.cs:528-547/549-568) - which resets the level
+    /// wholesale, and whatever the native side does to QualitySettings on a graphics device reset,
+    /// resolution change or fullscreen-mode change. One float add per frame plus one native getter
+    /// every 2 s is a cheaper price than a cap that silently stops holding.
     /// </summary>
     internal sealed class BoneWeightCap
     {
@@ -36,16 +47,22 @@ namespace PeakSafeOptimizer.Graphics
         /// </summary>
         private const SkinWeights Cap = SkinWeights.TwoBones;
 
-        /// <summary>Seconds between reasserts.</summary>
+        /// <summary>
+        /// Seconds between reasserts. Insurance only - see the class docstring for why there is no
+        /// known writer to fight and why the poll is kept anyway.
+        /// </summary>
         private const float ReassertInterval = 2f;
 
         /// <summary>
         /// Grace period before the first apply. The game's own graphics settings are applied once from
-        /// SettingsHandler's constructor (GameHandler.cs:154 -> SettingsHandler.cs:71-76). Snapshotting
-        /// before that could capture a value the player never chose, and the restore would then put
-        /// that back instead. It only constrains when the first apply may happen; every later
-        /// off-&gt;on transition re-samples immediately, since by then the game has long since written
-        /// its own value.
+        /// SettingsHandler's constructor (GameHandler.cs:154 -> SettingsHandler.cs:71-76, where
+        /// AddSetting calls Load then ApplyValue immediately). None of those 30 settings writes
+        /// skinWeights, so for the vanilla game this window is inert; it is kept because it costs one
+        /// float compare and it is the only thing standing between the snapshot and any other early
+        /// writer - a mod's own settings apply, or a quality-level switch during startup - that would
+        /// otherwise be captured as if the player had chosen it and written back on restore. It only
+        /// constrains when the first apply may happen; every later off-&gt;on transition re-samples
+        /// immediately, since by then startup is long over.
         /// </summary>
         private const float StartupGrace = 5f;
 
@@ -101,8 +118,9 @@ namespace PeakSafeOptimizer.Graphics
 
         /// <summary>
         /// Samples on the rising edge and reasserts afterwards. <see cref="_hasSnapshot"/> is the
-        /// edge detector: <see cref="Restore"/> clears it, so a re-enable snapshots the value that is
-        /// current then, while the 2 s reassert path finds it set and leaves the snapshot alone.
+        /// edge detector: <see cref="Restore"/> clears it - in a finally, so even a failed write-back
+        /// cannot leave a stale snapshot behind - so a re-enable snapshots the value that is current
+        /// then, while the 2 s reassert path finds it set and leaves the snapshot alone.
         /// </summary>
         private void Apply()
         {
@@ -137,6 +155,12 @@ namespace PeakSafeOptimizer.Graphics
         /// <summary>
         /// Falling edge: undo this lane's own write if it is still the live value, then drop the
         /// snapshot so it cannot be written back long after the player has moved on from it.
+        ///
+        /// The state teardown is in a finally, and it has to be: <see cref="_hasSnapshot"/> doubles as
+        /// the rising-edge detector for <see cref="Apply"/>, so a throwing write-back that left it set
+        /// would make the next enable skip re-sampling and the enable after that write a stale value
+        /// over whatever the player chose in between. Failing to restore is acceptable; poisoning the
+        /// snapshot is not.
         /// </summary>
         private void Restore(string reason)
         {
@@ -162,12 +186,15 @@ namespace PeakSafeOptimizer.Graphics
                         "PeakSafeOptimizer | bone weight cap had nothing to restore " +
                         $"({reason}); skinWeights was already at or below the cap.");
                 }
-                _wrote = false;
-                _hasSnapshot = false;
             }
             catch (Exception ex)
             {
                 _log?.LogError($"Bone weight cap restore failed safely: {ex.GetType().Name}: {ex.Message}");
+            }
+            finally
+            {
+                _wrote = false;
+                _hasSnapshot = false;
             }
         }
     }

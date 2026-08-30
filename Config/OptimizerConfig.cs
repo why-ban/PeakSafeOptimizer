@@ -12,6 +12,12 @@ namespace PeakSafeOptimizer.Config
     /// equivalent to vanilla, or when it repairs a vanilla fault. Anything that trades appearance,
     /// feel or animation fidelity for frames is off by default, however real its win is - that trade
     /// belongs to whoever installed the mod, not to the mod.
+    ///
+    /// There are exactly two declared exceptions, both on by default despite not being equivalent,
+    /// and both spelled out where they are declared below: <see cref="ExplosionScale"/> (fewer
+    /// explosion orbs and fewer screen-shake instances) and <see cref="TumbleWeedTargetScan"/> (up to
+    /// 0.1s of chase-target lag). Any further exception needs the same treatment: the cost stated in
+    /// the entry's own comment, not just in a commit message.
     /// </summary>
     public enum PatchId
     {
@@ -117,6 +123,16 @@ namespace PeakSafeOptimizer.Config
         LightVolumeSampleCache,
         // ScaleExperimental lane: reuses a tumbleweed's chase target for a few physics ticks instead
         // of rescanning every character every tick. Desert/Mesa specific because tumbleweeds are.
+        // Only the target *solve* is throttled - to once every 5 physics ticks, i.e. 0.1s. AddForce
+        // still runs every tick with the audited magnitude, and its direction is recomputed from the
+        // cached target's current Center, so a cached target that keeps moving still steers the
+        // tumbleweed continuously; a target that died or was destroyed forces an immediate rescan.
+        // The cost, and the reason this is the second declared exception to the default-on policy: a
+        // newly closer character can be ignored for up to 0.1s, so a tumbleweed can keep chasing the
+        // previous player for that long before switching. It is only observable on the desert/mesa
+        // biomes where tumbleweeds spawn, only when two players contend for the same one, and only as
+        // a fraction of a second of steering lag - while the saving is O(tumbleweeds x players) angle
+        // plus distance work at 50Hz, which the user confirmed measurably affects framerate there.
         TumbleWeedTargetScan,
         // ScaleExperimental lane: evaluates the animation PlayableGraph of a remote, fully
         // controlled, non-interacting player character once every N physics ticks instead of every
@@ -134,8 +150,8 @@ namespace PeakSafeOptimizer.Config
         // snapshot captured by SnowballContactSnapshot instead of re-reading the stored Collision.
         SnowballContactConsume,
         // Scale lane: equivalent replacement of CharacterMovement.OnCollision that reads contact 0
-        // once through Collision.GetContact(0) instead of four times through the allocating
-        // Collision.contacts array.
+        // once through Collision.GetContact(0) instead of six times through the allocating
+        // Collision.contacts array (CharacterMovement.cs:928, :948, and twice each on :953 and :955).
         CollisionContactsNoAlloc,
         // Scale lane: skips Bodypart.AddMovementForce when the force it would accumulate is exactly
         // the zero vector, which is the case for every part of every character that is not pressing a
@@ -242,17 +258,6 @@ namespace PeakSafeOptimizer.Config
                 return members;
             }
             return new[] { id };
-        }
-
-        /// <summary>
-        /// True when <paramref name="id"/> is the first member of its switch. Hot reload uses this to
-        /// act once per switch instead of once per patch, because a group is installed and uninstalled
-        /// as a unit.
-        /// </summary>
-        public bool IsGroupRepresentative(PatchId id)
-        {
-            IReadOnlyList<PatchId> members = GetGroupMembers(id);
-            return members.Count == 0 || members[0] == id;
         }
 
         public static OptimizerConfig Bind(ConfigFile config)
