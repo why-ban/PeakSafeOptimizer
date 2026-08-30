@@ -1,6 +1,6 @@
 {
     "name": "PeakSafeOptimizer",
-    "version_number": "1.2.0",
+    "version_number": "1.3.0",
     "website_url": "",
     "description": "Performance mod focused on 8-player lobbies. 38 of 44 patches on by default, each equivalence-proven or a vanilla crash fix, per-patch fail-closed validation, opt-in switches for the ones that trade fidelity for frames.",
     "dependencies": [

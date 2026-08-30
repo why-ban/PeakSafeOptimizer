@@ -1,4 +1,4 @@
-# PeakSafeOptimizer 1.2.0 集中测试指引
+# PeakSafeOptimizer 1.3.0 集中测试指引
 
 本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 38 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
@@ -20,7 +20,7 @@
 
 启动日志逐行均带 `PeakSafeOptimizer |` 前缀，用该关键字过滤可整块取出报告。
 
-- 版本 `1.2.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
+- 版本 `1.3.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
 - 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=44, enabled=38, applied=38, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
   - 没有只显示不生效的键。`registered - enabled` 应等于默认关闭的 6 项。注意 `registered` 数的是补丁而不是开关：`Experimental.RemoteRagdollLod` 一个开关对应 4 个补丁，`Fixes.SnowballContactGuard` 一个开关对应 2 个。
@@ -253,7 +253,20 @@ BepInEx 版本 / 其它模组数量：
 - 插件不提供帧率计数，流畅度请外部工具或主观记录并与无插件基准对比。
 - 单项失败被隔离，报告写明具体项与原因。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
-- **1.2.0 的全部改动都未经游戏内验证。** 按验收优先级排列：
+- **1.3.0 的全部改动同样未经游戏内验证。** 1.3.0 是一轮纯静态修复（补丁数与开关数不变），新增验收点：
+  1. **A4（`IKItemGuard`）升为高优先级** —— 修掉了一个与 A5 同类的写入抑制回归：持有「只缺 `Hand_L`」的
+     道具时，原版已完成两次右手写入才抛异常，而旧守卫把它们一起跳过了。请持各类道具观察右手是否跟随，
+     并记录命中的是 `right-hand-node-missing` 还是 `left-hand-node-missing`。
+  2. **B13（爆炸）的集群判定半径改为按 `baseScale` 推导** —— 主炸药约 6.10 米、Small/Fae 约 3.05 米。
+     请确认相距 5–6 米的两发主炸药现在会进集群档（旧版 3.5 米阈值下不会），且单发仍与原版完全一致。
+  3. **热重载分组语义** —— 分组安装器改了三处失败路径。只能靠日志验收：`SnowballContactGuard` 应出现
+     两行、`RemoteRagdollLod` 应出现四行；任何 `FailedUninstall` 或半装提示都要原文记录。
+  4. **新增两条诊断** `RemoteClusterAnimationThrottle.rig-builder-unavailable` /
+     `animator-graph-invalid`：健康 rig 上应一次都不出现。
+  5. **已移除的诊断名**：`WeightRefreshCoalescing.same-frame-duplicate-skipped`、
+     `ExplosionScale.scene-handle-thrash`、`AnimatedMouthMaterial.character-null`。若日志里仍出现，
+     说明装的不是 1.3.0。
+- **1.2.0 的全部改动也仍未经游戏内验证。** 按验收优先级排列：
   1. **A5（表情轮）是最高优先级** —— 1.1.0 引入了一个真实的功能性回归（角色已死或已结算且 `refs.stats`/`input` 缺失时，守卫会把原版的「关闭表情轮」分支一起跳过，导致表情轮 UI、光标与暂停菜单卡住）。1.2.0 重写了守卫使其精确复刻原版的两处短路。必须实测死亡/观战/结算三种状态下的开合。
   2. **B13（爆炸）** —— 基础上限从 3/1 降到 2/1（主炸药 10→5 球），并新增了震动变弱这个代价声明。同时确认了火箭/背包/GhostBall 的爆炸不含 `ExplosionEffect`、完全不受本补丁影响。
   3. **D1/E1/E2（六项默认关闭）** —— 距离基准改为观察对象、crouch/sprint 纳入不降级、warmup 改按物理步、tick 号改双精度、相位改哈希、失败闩锁改按角色。开启前逐项走查，不要一次全开。

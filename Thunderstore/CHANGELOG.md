@@ -1,5 +1,154 @@
 # Changelog
 
+## 1.3.0
+
+Still 44 patches and 40 switches, 38 on by default. Seven concurrent read-only audits over the whole
+plugin, then a repair pass over everything they turned up that could be settled by reading code
+rather than by playing. One behaviour regression, three real defects in the group installer, one
+threshold that was a magic number and is now derived from the assets, and a long list of comments
+that were confidently wrong.
+
+### The regression, first
+
+`IKItemGuard` froze the right IK hand target on any held item whose prefab has a `Hand_R` child but
+no `Hand_L`. C# evaluates `a.position = f()` receiver-first, so on such an item vanilla completes
+*both* right-hand writes (`CharacterAnimations.cs:397-398`) and only then raises at `:399`. The guard
+skipped the whole item branch, so the right hand stopped tracking the item - every physics frame, for
+as long as it was held. It now reproduces those two writes through delegates bound to the two
+`internal` helpers before skipping, and books the two cases separately
+(`right-hand-node-missing` vs `left-hand-node-missing`). This is the same class of mistake as the
+1.1.0 emote-wheel regression: skipping the writes vanilla performs *before* it throws.
+
+### Group installs were not all-or-nothing
+
+Three defects, all in the machinery that makes one switch install several patches as a unit.
+
+- HarmonyX registers a prefix into the patch info **before** generating the wrapper
+  (`PatchProcessor.Patch`), so when wrapper generation throws, `GetPatchInfo` already lists our
+  method. The installer recorded that as an installed patch, `IsInstalled` returned true for a patch
+  that had *failed*, and the group rollback was skipped entirely - leaving a half-installed switch
+  with nothing in the log to say so. A record in that state is now flagged separately: never live,
+  never reinstalled (that would attach the prefix twice), still cleaned up on uninstall.
+- Rolling a group back claimed members had been withdrawn cleanly when their `Reset` threw. It asked
+  a question that excludes exactly that case, took the success branch, and discarded the real reason.
+  It now reports which of the two failure shapes happened.
+- A member that was already live before a failed install kept running, unreported. It is now named as
+  a deliberately half-installed switch.
+
+Also: the failed-startup rollback shut the engine-global lanes down *after* detaching the patches,
+the opposite order from a normal shutdown, leaving a window where `Physics.reuseCollisionCallbacks`
+was still set with the Snowball guards already gone.
+
+### The cluster radius is no longer a magic number
+
+`ExplosionScale` used a fixed 3.5m to decide whether an explosion overlaps a recent one. That is
+smaller than the main dynamite's own fireball radius, so two detonations 5m apart - visually almost
+fully overlapped, which is precisely the fill this patch exists to cut - counted as isolated and each
+kept five full-size orbs. The threshold is now derived from the orb geometry the assets carry: the orb
+root's localScale (4.4401164) times the Icosphere mesh AABB extent (1.372998), i.e.
+`baseScale * 6.0962` - about 6.10m for the main dynamite and 3.05m for the Small/Fae variants. A NaN,
+zero, negative or infinite `baseScale` falls back to the old constant. The test uses the *current*
+explosion's radius, because what is being decided is whether this fireball lands on screen that is
+already covered.
+
+Two more things in that patch:
+
+- The scene-handle debounce is gone. It guarded against last scene's positions being counted as
+  neighbours, but the 2.5s window already does that: every scene load in this game is
+  `LoadSceneMode.Single` behind a loading screen that also waits for the local character to spawn,
+  and segment changes are `SetActive` within one scene. Its only observable behaviour was a false
+  `scene-handle-thrash` report, so that reason no longer exists.
+- The light tier's caps were `Math.Min(pointCap, 2)` and `Math.Min(subPointCap, 1)` against a 2/1
+  base - identity - while the comment claimed it cut counts from one neighbour on. Those caps are now
+  named constants of their own, so the no-op is explicit and giving that tier a real reduction is a
+  one-constant edit.
+
+### Diagnostics that were measuring the wrong thing
+
+The repair counters are cited as evidence of vanilla faults, so a counter that fires when nothing is
+wrong is worse than no counter.
+
+- `WeightRefreshCoalescing` counted a repair reason on the path where the patch *succeeds*.
+  `same-frame-duplicate-skipped` is removed.
+- `PocketBehaviorGuard` counted one per bot per frame. `Character.player` is null for bots by design,
+  so skipping the call is right and the accounting was not - the same exclusion `Parachute` already
+  had.
+- `AnimatedMouthMaterial` tested the renderer and the texture array before the audio source, but
+  vanilla's guard short-circuits on the audio source and runs no body at all, so a mouth with no
+  audio source was reported as a fault every frame.
+- `RemoteClusterAnimationThrottle` silently swallowed a null rig builder and an invalid animation
+  graph and reported success. Vanilla raises there every tick. The guards stay - reintroducing a
+  per-step exception would be worse - but a malformed rig is now visible as
+  `rig-builder-unavailable` / `animator-graph-invalid`.
+
+### Hot paths
+
+- `LightVolumeSampleCache` allocated a carrier object on every cache miss, the last per-call
+  allocation in the plugin. The Postfix now recomputes the voxel key from the same argument through
+  the same pure function, so nothing is carried across the call.
+- `RemoteRagdollLod` read a static property behind a native alive check *before* its per-frame
+  decision cache - useless on the cache-hit path, which is where the roughly twenty thousand calls a
+  second land.
+- `AnimatedMouthMaterial` read two material properties by string name every frame; the ids are
+  resolved once at install.
+- `RemoteItemInterpolationThreshold` paid three native calls before four managed checks that could
+  reject the frame. Single-player and non-synced items now cost none of them.
+- `DetailBodypartThrottle` computed the physics tick twice per detail part per step, and never checked
+  `Time.fixedDeltaTime`: a zero step would freeze the tick and permanently skip some parts, the one
+  direction in which a stuck tick is not safe.
+- `PlayerNameUiWrites` resolved the same references two to four times each.
+- `ItemScaleRedundantWrite` did three redundant destroyed-object checks per call.
+
+### Arguments and assertions that were wrong
+
+- `StatusEmitterScan` calls `ScreenVFX.StartFX()`, whose `0.5f` default is compiled into this DLL.
+  Nothing asserted the overlay chain at all; all four members are asserted now, plus that the default
+  is still `0.5f` - which no signature check can see.
+- `RopeSegmentGuard` justified skipping a frame with "idempotent copy, recomputed next frame". That
+  value is written once per grab and is constant for the climb, so the copy only ever matters on the
+  first successful frame. The real argument is that the rotation it feeds is restored within the same
+  physics step.
+- `BoneWeightCap` claimed URP rewrites `antiAliasing` every frame; that write is in the pipeline
+  constructor. Nothing in the game or URP writes `skinWeights` and nothing changes quality level, so
+  the periodic reassert is kept only as insurance against writers that cannot be seen from here, and
+  now says so. Its restore also cleared its bookkeeping after the write-back rather than in a
+  `finally`, so a throwing restore left a stale snapshot that the next disable would write over the
+  player's newer value.
+- `RemoteRagdollLodAnimator` listed an accepted cosmetic cost - a stale water flag - that does not
+  exist, because the replacement does write the parameter that flag reads.
+- `RemoteRagdollLodPhysics` rejected re-bounding the friction-audit window on the grounds that it
+  could not be shown whether a delegate call is seen by a Harmony detour. MonoMod's own startup
+  selftest does exactly that and asserts the hook answered, so BepInEx could not start if it were
+  not. The real reason is stronger: `Collider.sharedMaterial` has exactly four writers in the whole
+  game and all four are inside the method being skipped, so in vanilla there is nothing for the
+  missed audits to correct.
+- `RemoteRagdollLod` claimed the cluster lane validates the fixed timestep for both lanes. It
+  validates it for itself.
+- `Acquire()` sat before two throwing statements while the comment asserted nothing below could
+  throw.
+
+### Subtraction
+
+`DetailBodypartThrottle` kept its own copy of the eligibility list and now calls the shared one.
+`RemoteRagdollLodAnimator` emitted two dynamic methods to reach Animator members that are public in
+an assembly this project already references. Nine assertions on fields `ExplosionScale` neither reads
+nor writes are dropped - a shape check cannot protect an argument that depends on *serialized*
+values, which is what those arguments depend on. Plus: two config/report methods whose docstrings
+claimed hot reload used them (it does not), an unused module-cleanup channel, three unused emit
+helpers, and twelve unused using directives.
+
+### Documentation
+
+The README claimed 13 orbs per explosion in one paragraph and 10 in another, and that the patch only
+cuts counts (it cuts counts and shrinks them). `Collision.contacts` is evaluated six times, not seven
+or four - four places said three different numbers. `TumbleWeedTargetScan` is now a declared
+exception to the default-on rule with its cost written out. Five section subtotals in the test guide
+disagreed with their own tables, the results template omitted five items, and the README's
+per-section directory labels were wrong three times out of five, because the sections are organised by
+the kind of optimisation and the directories are not.
+
+None of the above is verified in game. See TESTING.md; its acceptance order is unchanged.
+
 ## 1.2.0
 
 44 patches and 40 switches, down one from 1.1.0: `ParticleCountCullerWrite` was removed. A third

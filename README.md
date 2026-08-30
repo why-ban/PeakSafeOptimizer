@@ -1,4 +1,4 @@
-# PeakSafeOptimizer 1.2.0
+# PeakSafeOptimizer 1.3.0
 
 PEAK 的 BepInEx 5 插件，用于修复已确认的空引用/越界异常，并针对**多人玩家数量**与**地面物品数量**带来的每帧重复计算做保守削减。
 
@@ -12,7 +12,7 @@ PEAK 的 BepInEx 5 插件，用于修复已确认的空引用/越界异常，并
 |---|---|
 | Assembly-CSharp MVID | `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1` |
 | Assembly-CSharp SHA-256 | `b5c1b8b73f82cca847942b0be758dd554fe347d1a7c89c69e292fafb115bfffd` |
-| 插件版本 | `1.2.0` |
+| 插件版本 | `1.3.0` |
 
 SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerprint.Capture()` 在启动时读取游戏 Assembly-CSharp 的 `ModuleVersionId` 得到。
 
@@ -173,6 +173,104 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Graphics.CapBoneWeights` | `false` | 把 `QualitySettings.skinWeights` 限制到每顶点 2 根骨骼——游戏画质菜单没有这一项，而每顶点骨骼数是每个蒙皮角色的逐顶点成本，随屏幕上的人数放大。只降不升（已经 ≤2 就不写）。启动 5 秒后才首次生效（等游戏自己的画质设置先写完，否则快照会存到玩家没选过的值），之后每 2 秒重申一次。只有本车道自己写过、且当前值仍是它写的那个值时才会在关闭/退出时写回启动值。默认关闭：肩/髋关节形变会略糙。 |
 
 这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项，且不默认改变画面**。每顶点骨骼数在 `Assembly-CSharp` 里没有对应设置类，玩家无从调整，所以由补丁提供开关——但默认关闭，因为降低骨骼权重会让关节处的形变变糙。曾经这里还有一项强制关闭 MSAA（游戏同样没有抗锯齿设置），已移除：关抗锯齿是画面决定，应该由玩家做。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
+
+## 1.3.0 修复的问题（变更说明）
+
+七条只读审计覆盖全插件，随后把其中**能靠读代码判定**的每一项都改掉。补丁数不变：仍是 44 补丁 / 40 开关 /
+默认开启 38。
+
+功能性回归（`IKItemGuard` 自诞生起就有）：
+
+- 持有「有 `Hand_R` 子节点但没有 `Hand_L`」的道具时，右手 IK 目标被冻结。C# 对 `a.position = f()` 是先求接收方
+  再求实参，所以这种道具上原版**已经完成**两次右手写入（`CharacterAnimations.cs:397-398`）才在 `:399` 抛
+  NRE，而守卫把整个 item 分支一起跳过了 —— 右手每物理帧都不跟随道具。现在先用绑定到两个 `internal` helper
+  的委托复现那两次写入再跳过，并把两种缺失分开记账（`right-hand-node-missing` / `left-hand-node-missing`）。
+  这与 1.1.0 表情轮回归是同一类错误：跳过了原版「抛异常之前」的写入。
+
+分组安装其实不是原子的（三个缺陷）：
+
+- HarmonyX 在生成包装器**之前**就把 prefix 登记进 patch info（`PatchProcessor.Patch`），所以包装器生成抛异常时
+  `GetPatchInfo` 已经列出我们的方法。安装器把它记成「已安装」，`IsInstalled` 对一个**失败**的补丁返回 true，
+  分组回滚根本不触发，日志里也没有任何一条说明这个开关处于半装状态。现在这种记录有独立标志：永不算 live、
+  永不重装（重装会把 prefix 挂两遍）、卸载时仍会清理。
+- 分组回滚在成员 `Reset` 抛异常时谎称「已干净撤回」——它问的那个判断恰好排除了这种情形，于是走了成功分支并
+  丢弃了真实原因。现在会区分「Unpatch 失败、方法仍挂着」与「Unpatch 成功但 Reset 抛异常」两种形态。
+- 失败安装之前就已存活的组成员会继续运行且完全不报告。现在会明确报成「故意留下的半装开关」。
+- 失败启动的回滚顺序与正常关机相反（先摘补丁后关引擎标志），存在「Snowball 守卫已摘、
+  `Physics.reuseCollisionCallbacks` 仍为 true」的窗口。已交换。
+
+集群判定半径不再是魔数：
+
+- `ExplosionScale` 原来用固定 3.5 米判断两发爆炸是否重叠，而这个值**小于主炸药自己的火球半径**——相距 5 米的
+  两发在屏幕上几乎完全叠加（正是这个补丁要削的填充），却被判成两次独立爆炸、各保 5 个全尺寸球。现在按资产里的
+  orb 几何推导：orb 根 localScale 4.4401164 × Icosphere 网格 AABB extent 1.372998，即 `baseScale × 6.0962`，
+  主炸药约 6.10 米、Small/Fae 约 3.05 米。`baseScale` 为 NaN/0/负/无穷时回退到旧常量。判据用**当发自己**的
+  半径，因为要决定的是这一发的火球会不会落在已被覆盖的屏幕上。
+- 场景句柄防抖整段删除。它防的是「上一场景的坐标被当成邻居」，但 2.5 秒时间窗已经独立提供了这个保证：本游戏
+  所有场景加载都是 `LoadSceneMode.Single`、都经过还要等本地角色生成的加载画面，段落切换是同场景 `SetActive`。
+  它唯一的可观察行为是一条假的 `scene-handle-thrash` 报告，该诊断名已随之移除。
+- 轻档的两行 `Math.Min` 在 2/1 基线下是恒等变换（注释却声称从 1 个邻居起就减球）。现在轻档有自己的命名常量，
+  no-op 变成显式的，将来给轻档加真实减球是改一个常量。
+
+诊断在度量错误的东西（修复计数被当作原版故障的证据，所以「没坏也报」比不报更糟）：
+
+- `WeightRefreshCoalescing` 在补丁**成功生效**的路径上记诊断。`same-frame-duplicate-skipped` 已移除。
+- `PocketBehaviorGuard` 每帧每 bot 记一次。`Character.player` 对 bot 恒为 null 是设计，跳过调用是对的、记账是
+  错的 —— `Parachute` 早就做了同样的排除。
+- `AnimatedMouthMaterial` 把 renderer / 纹理数组的检查排在 audioSource 之前，而原版守卫在 audioSource 上短路、
+  整个方法体不执行，于是「没有 audioSource」的 mouth 每帧被报成原版故障。
+- `RemoteClusterAnimationThrottle` 静默吞掉 null rig builder 与无效动画图并报成功。原版在那里每 tick 抛异常。
+  守卫保留（重新引入每步异常更糟），但畸形 rig 现在会以 `rig-builder-unavailable` /
+  `animator-graph-invalid` 暴露；非求值 tick 上的 `SetPhysicsMats` 也纳入了既有失败闩锁
+  （`set-physics-mats-failed`）。
+
+热路径：
+
+- `LightVolumeSampleCache` 每次 cache miss 分配一个载体对象（插件里最后一处每次调用的堆分配）。Postfix 现在用
+  同一个纯函数从同一个实参重算体素 key，不需要跨调用传任何状态。
+- `RemoteRagdollLod` 在每帧决策缓存**之前**读一个背后有 native 判活的静态属性 —— 而缓存命中正是每秒约两万次
+  调用的落点。已移到缓存之后，两处 CWT 查找也改为先 `TryGetValue`。
+- `AnimatedMouthMaterial` 每帧用字符串名读两个 material 属性；属性 id 改为安装时解析一次。
+- `RemoteItemInterpolationThreshold` 在四个能否决该帧的托管检查之前先付了三次 native 调用。已重排，单机与未同步
+  的物品现在一次 native 都不付。
+- `DetailBodypartThrottle` 每个细节部件每步算两次物理 tick，且完全不校验 `Time.fixedDeltaTime` —— 步长为 0 会
+  让 tick 卡死并**永久**跳过某些部件，这是 tick 卡死唯一不指向安全方向的情形。
+- `PlayerNameUiWrites` 对同一引用重复解析 2–4 次；`ItemScaleRedundantWrite` 每次调用三次多余的判活。
+
+论证与断言错误：
+
+- `StatusEmitterScan` 调 `ScreenVFX.StartFX()`，那个 `0.5f` 默认值是编译进本 DLL 的。整条覆盖层链一条断言都没有；
+  现在四个成员全部断言，外加一条「默认值仍是 `0.5f`」的自检 —— 这是任何签名断言看不见的。
+- `RopeSegmentGuard` 用「idempotent copy, recomputed next frame」为跳过辩护。那个值每次抓绳只写一次、整段攀爬
+  是常量，所以 copy 只在首次成功那一帧有实质效果。真正的理由是它喂给的旋转在同一物理步内被还原。
+- `BoneWeightCap` 声称 URP 每帧写 `antiAliasing`，而那个写在管线构造函数里。游戏与 URP 都不写 `skinWeights`、
+  也不切质量档，所以周期性重申只作为「防这里看不见的写者」的保险并如实写明。它的 `Restore` 还把状态清零放在
+  写回**之后**而不是 `finally` 里，写回抛异常会留下陈旧快照、下次关闭时覆盖玩家的新选择。
+- `RemoteRagdollLodAnimator` 声明了一项不存在的观感代价（水中标志滞后）——替换体确实写了那个标志读取的参数。
+- `RemoteRagdollLodPhysics` 以「无法判定委托调用是否命中 Harmony detour」为由拒绝修摩擦审计窗口。MonoMod 自己的
+  启动自检做的就是这件事并断言 hook 应答，否则 BepInEx 根本起不来。真正的理由更强：全游戏写
+  `Collider.sharedMaterial` 的只有四处、全部在被跳过的那个方法体内，所以原版里没有任何东西需要那些审计去纠正。
+- `RemoteRagdollLod` 声称聚集车道替两条车道校验固定步长；它只替自己校验。
+- `Acquire()` 排在两条会抛的语句之前，而注释断言「下面没有任何东西会抛」。
+
+减法：
+
+- `DetailBodypartThrottle` 自己维护了一份 fallback 列表，现在调共享的那份。
+- `RemoteRagdollLodAnimator` 为了访问 Animator 的 public 成员发射了两个 `DynamicMethod`，而那个程序集本项目
+  已经引用。
+- 删掉 `ExplosionScale` 里九条对「既不读也不写的字段」的断言：形状断言保护不了依赖**序列化值**的论证，而那些
+  论证恰好全部依赖序列化值；MVID 门控已经覆盖了 `ExplosionEffect` 被重写的情形。
+- 删掉两个 docstring 声称「热重载会用」但实际零调用的方法、一条空的模块清理通道、三个零调用的发射 helper、
+  以及十二处未使用的 `using`。
+
+文档：
+
+- README 在一段里说 13 球、另一段里说 10 球，且声称本补丁「只削减球数」（实际是既削球数又缩尺寸）。
+- `Collision.contacts` 是 6 次，不是 7 或 4 —— 四处来源给了三个不同数字。
+- `TumbleWeedTargetScan` 成为默认开启政策的**第二个明文例外**，代价写清（新出现的更近目标最多滞后 5 个物理刻
+  被采纳）。
+- `TESTING.md` 五处分节小计与自己的表格不符，结果模板漏了五项；README 各小节挂的目录路径五处错三处（分节是按
+  优化性质分的，目录不是）。
 
 ## 1.2.0 修复的问题（变更说明）
 
