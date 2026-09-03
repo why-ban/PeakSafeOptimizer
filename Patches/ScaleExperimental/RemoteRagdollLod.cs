@@ -15,9 +15,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///
     /// Three of the four patches skip their target outright when this returns true:
     ///   CharacterRagdoll.FixedUpdate  (animation graph + IK evaluation, SaveAnimationData,
-    ///                                  ResetRotation/ResetTransform, SetPhysicsMats)
+    ///                                  ResetRotation/ResetTransform)
     ///   Bodypart.Animate              (joint target rotation, follow torque, follow force)
     ///   Bodypart.AddMovementForce     (locally simulated movement force)
+    /// SetPhysicsMats is deliberately absent from that first line: its only call site is gated on
+    /// character.IsLocal (CharacterRagdoll.cs:153-156) and every character this helper can select is
+    /// remote by construction, so vanilla makes no such call for them and skipping the method body
+    /// removes none. See RemoteRagdollLodPhysicsPatch for the full argument.
     /// The fourth does not skip: <see cref="RemoteRagdollLodAnimatorPatch"/> replaces
     /// CharacterAnimations.Update with a reduced body (the whole tail of its Prefix, after the
     /// ShouldDowngrade test, is that body). It still writes the animation
@@ -30,13 +34,17 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///
     /// What is deliberately NOT touched, and why the result is a passive ragdoll rather than a
     /// broken one (all four calls stay in CharacterMovement.FixedUpdate, audited source
-    /// CharacterMovement.cs:304-315, and its structure is verified in Initialize):
+    /// CharacterMovement.cs:311-323, and its structure is verified in Initialize):
     ///   Bodypart.Gravity          -> gravity keeps being accumulated, so nothing floats.
     ///   Bodypart.ToggleUseGravity -> Rigidbody.useGravity keeps tracking currentRagdollControll.
     ///   Bodypart.Drag             -> per-step velocity damping still runs, so velocity converges
     ///                                instead of growing without bound.
     ///   Bodypart.ApplyForces      -> forcesToAdd is applied and then zeroed every physics step,
     ///                                so the accumulator can never build up an explosive impulse.
+    /// That loop was rewritten in this build - the four currentRagdollControll multiplications and
+    /// the partList reference are hoisted above it (CharacterMovement.cs:306-310) and the element is
+    /// read into a local - but the six calls, their order and their arguments are unchanged, so every
+    /// claim above still reads off the same six lines.
     /// Colliders, Rigidbody enable state, kinematic state, CharacterSyncer position interpolation
     /// and every RPC path are untouched, so remote positions keep being driven by the network as
     /// usual and collision behaviour is unchanged. No new force, torque or transform write is
@@ -91,20 +99,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         ///    FixedUpdate/SnapToAnimation pairs are at :614-615 and :627-628) - would then
         ///    snap every bodypart onto the hip, because WorldTargetPos() = hip + Vector3.zero.
         ///    One physics step is not enough on its own: the very first CharacterRagdoll.FixedUpdate
-        ///    of a character returns right after SetPhysicsMats through the firstFrame branch
-        ///    (CharacterRagdoll.cs:153-158) and produces no targets at all, so the window has to span
+        ///    of a character returns through the firstFrame branch (CharacterRagdoll.cs:157-161) -
+        ///    having done nothing at all for a remote character, since the SetPhysicsMats call ahead of
+        ///    it is IsLocal gated at :153-156 - and produces no targets, so the window has to span
         ///    strictly more than one step.
         /// 2. Pose changes must be given time to blend. While downgraded, data.targetHeadHeight and
         ///    data.targetHipHeight are frozen at their last really-evaluated values (see
         ///    RemoteRagdollLodPhysicsPatch for why re-deriving them from a physics pose is wrong),
-        ///    and their consumers - CharacterMovement.Stand (CharacterMovement.cs:690-699) and
-        ///    RaycastGroundCheck (:874-877) - do run for remote characters. A crouch or sprint
+        ///    and their consumers - CharacterMovement.Stand (CharacterMovement.cs:709-718) and
+        ///    RaycastGroundCheck (:891-894) - do run for remote characters. A crouch or sprint
         ///    transition changes both heights, so the window has to be long enough for the animator
         ///    to blend into the new pose while the character is still fully evaluated. 15 steps is
         ///    0.3s at the default 50Hz fixed step. The exact blend length lives in the animator asset
         ///    and is not visible in the decompiled source, so 0.3s is a judgement call rather than a
         ///    derived number; it is the same order as the game's own crouch-related timings
-        ///    (CharacterMovement.cs:240 uses a 0.2s sinceGrounded window, CharacterAnimations damps its
+        ///    (CharacterMovement.cs:242 uses a 0.2s sinceGrounded window, CharacterAnimations damps its
         ///    pose parameters over 0.125-0.25s). Erring long only delays a downgrade.
         ///
         /// Counted in physics steps rather than rendered frames on purpose: the producer in (1) is
@@ -425,21 +434,21 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// data.targetHeadHeight and data.targetHipHeight keep the value from the last real
         /// evaluation (re-deriving them from the physics pose is the self-reinforcing sag described in
         /// that patch). Verified that both values really are consumed for remote characters:
-        /// CharacterMovement.FixedUpdate (CharacterMovement.cs:283-317) has no IsLocal or
+        /// CharacterMovement.FixedUpdate (CharacterMovement.cs:285-325) has no IsLocal or
         /// photonView.IsMine gate anywhere - the only local-only gates in that class are in Update
-        /// (:181) and in TryJetpack/JetpackRPC (:410, :569) - so RaycastGroundCheck (:286 -> :874-877,
-        /// which uses targetHipHeight as its ray length) and Stand (:288-291 -> :690-699, which uses
-        /// targetHeadHeight as its InverseLerp target) both run for every character on this client,
-        /// remote ones included. Neither field is in the fallback list, and neither
-        /// CharacterMovement.SetMovementState (which is IsMine gated, :224) nor the crouch RPC
-        /// (:216-220) nor CharacterSyncer (CharacterSyncer.cs:110, isSprinting) touches the heights;
-        /// only CharacterRagdoll.SaveAdditionalTransformPositions writes them
-        /// (CharacterRagdoll.cs:208, :215 - the only two writes in the whole assembly). A remote
+        /// (:183), in TryJumpOffVineOrRope (:419) and in TryJetpack/JetpackRPC (:427, :586) - so
+        /// RaycastGroundCheck (:288 -> :891-894, which uses targetHipHeight as its ray length) and
+        /// Stand (:290-293 -> :709-718, which uses targetHeadHeight as its InverseLerp target) both run
+        /// for every character on this client, remote ones included. Neither field is in the fallback
+        /// list, and neither CharacterMovement.SetMovementState (which is IsMine gated, :226) nor the
+        /// crouch RPC (:218-222) nor CharacterSyncer (CharacterSyncer.cs:107, isSprinting) touches the
+        /// heights; only CharacterRagdoll.SaveAdditionalTransformPositions writes them
+        /// (CharacterRagdoll.cs:211, :216 - the only two writes in the whole assembly). A remote
         /// character crouching or sprinting 60m away would therefore keep standing to its previous
         /// height and ground-check with its previous ray length until it came back inside the exit
         /// distance. Both flags do arrive on this client for a remote character - isCrouching through
-        /// the RPCA_SetCrouch RPC sent to RpcTarget.All (CharacterMovement.cs:212-220) and isSprinting
-        /// through the sync stream (CharacterSyncer.cs:110) - so the change is observable here on the
+        /// the RPCA_SetCrouch RPC sent to RpcTarget.All (CharacterMovement.cs:210-222) and isSprinting
+        /// through the sync stream (CharacterSyncer.cs:107) - so the change is observable here on the
         /// tick it happens. Treating a change as "return to full behaviour and re-arm the warm-up"
         /// costs one warm-up window per crouch or sprint transition and removes the stale-height window
         /// entirely.
@@ -598,7 +607,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// screened out by the callers either, so each of them guards itself instead of relying on
         /// this method: RemoteClusterAnimationThrottle rejects a non-positive or infinite
         /// Time.fixedDeltaTime before asking for a tick
-        /// (RemoteClusterAnimationThrottlePatch.cs:296-298), and DetailBodypartThrottle does the same
+        /// (RemoteClusterAnimationThrottlePatch.cs:311-313), and DetailBodypartThrottle does the same
         /// in its Prefix (DetailBodypartThrottlePatch.cs:234-236) - it has to, because a frozen index
         /// makes `(tick + phase) % Interval` constant and would skip Animate for some phases *forever*
         /// rather than for a few steps. An earlier version of this comment claimed the cluster lane was
@@ -729,6 +738,18 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return false;
             if (data.carrier != null || data.carriedPlayer != null)
                 return false;
+            // Condor carry. The gap is not new - a condor could always drag a character - but it was
+            // not detectable before this build, which added CharacterData.carrierCondor. None of the
+            // existing carry conditions sees it: CharacterData.GetTargetRagdollControll only forces
+            // full control for `carrier`, which is a player, so a condor-carried character keeps
+            // currentRagdollControll at 1 and passes the control threshold, while the condor flies it
+            // well past the enter distance and Condor.PullCharacter drags it with ApplyExtraDrag plus
+            // two AddForce calls every physics step. Downgrading there means going limp on exactly the
+            // state the list already refuses to downgrade for player carries. It cannot latch: Condor
+            // clears the field in LetGo and in GiveUp, and CharacterClimbing clears it in
+            // StopAnyClimbing and on interacting with a climb handle.
+            if (data.carrierCondor != null)
+                return false;
             if (data.isCarried || grabbedPlayerRef(data) != null || grabbingPlayerRef(data) != null)
                 return false;
             if (data.dead || data.fullyPassedOut)
@@ -806,6 +827,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "carrier", typeof(Character));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "carriedPlayer", typeof(Character));
+            // Condor carry, read by the fallback list. Only the field is asserted: its clearers are
+            // private methods on Condor, and pinning those would add fail-closed surface for members
+            // this class never touches.
+            ScaleValidation.RequireInstanceField(typeof(CharacterData), "carrierCondor", typeof(Condor));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbedPlayer", typeof(Character));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "grabbingPlayer", typeof(Character));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "isCarried", typeof(bool));

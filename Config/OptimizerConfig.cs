@@ -43,9 +43,7 @@ namespace PeakSafeOptimizer.Config
         // Scale lane (Lane E1): scan/redundant-write reduction for multiplayer player counts
         // and ground item counts. Each entry is registered and gated independently.
         HeatEmissionScan,
-        RagdollPhysicsMats,
         ItemCollisionMode,
-        GenericOptimizerRange,
         // Scale lane: merges Campfire.ApplyCampfireProtection's two same-frame full player scans
         // into one. Strictly equivalent; the single scan reproduces _charactersInRadius plus
         // everyoneInRange and reuses them for the OrbFogHandler write and the buff branch.
@@ -168,16 +166,6 @@ namespace PeakSafeOptimizer.Config
         // (ItemOptimizer.cs:9-19), which synchronously invokes OnDisable, which calls
         // DeregisterItem(null), and Dictionary.Remove(null) throws. Confirmed in-game: 67 times.
         ItemOptimizerDeregisterGuard,
-        // Scale lane: equivalent replacement of StatusEmitter.Update(), which every spore-gas volume
-        // in the level runs every frame with no distance gate of its own. Confirmed against the
-        // shipped assets: 1571 StatusEmitter plus 108 WindAffectedStatusEmitter instances exist, and
-        // nothing distance-gates them - GenericOptimizer, the game's own script disabler, is only on
-        // arrow shooters and venus fly traps. Resolves the local character's Center and its distance
-        // once instead of the two to four times vanilla does, and replaces the string-keyed overlap
-        // probe with a single TryGetValue. The range test stays a real square root: a squared compare
-        // is not exact in the rounding band around the threshold and the in-range side of that band is
-        // a live damage tick.
-        StatusEmitterScan
     }
 
     public sealed class OptimizerConfig
@@ -271,15 +259,7 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.EmoteWheelGuard] = BindPatch(config, PatchId.EmoteWheelGuard, true),
                 [PatchId.Campfire] = BindPatch(config, PatchId.Campfire, true),
                 [PatchId.HeatEmissionScan] = BindPatch(config, PatchId.HeatEmissionScan, true),
-                [PatchId.RagdollPhysicsMats] = BindPatch(config, PatchId.RagdollPhysicsMats, true),
                 [PatchId.ItemCollisionMode] = BindPatch(config, PatchId.ItemCollisionMode, true),
-                // Squared-distance equivalent for GenericOptimizer.AnyCharacterWithinRange. Confirmed
-                // against the shipped assets: all 2133 GenericOptimizer instances override
-                // rangeToDisableScripts with a finite value (82m on arrow shooters, 60m on venus fly
-                // traps) rather than leaving the float.PositiveInfinity field default, so this runs a
-                // real distance comparison per character per frame per instance and the squared form
-                // is a genuine saving rather than a thin indirection.
-                [PatchId.GenericOptimizerRange] = BindPatch(config, PatchId.GenericOptimizerRange, true),
                 [PatchId.CampfireProtectionMerge] = BindPatch(config, PatchId.CampfireProtectionMerge, true),
                 // Host-only zombie scan optimizations (squared-distance equivalents).
                 [PatchId.ZombieScanRange] = BindExperimental(config, PatchId.ZombieScanRange, true),
@@ -316,9 +296,7 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.BinocularSunGuard] =
                     BindPatch(config, PatchId.BinocularSunGuard, true),
                 [PatchId.ItemOptimizerDeregisterGuard] =
-                    BindPatch(config, PatchId.ItemOptimizerDeregisterGuard, true),
-                [PatchId.StatusEmitterScan] =
-                    BindPatch(config, PatchId.StatusEmitterScan, true)
+                    BindPatch(config, PatchId.ItemOptimizerDeregisterGuard, true)
             };
 
             // Groups: sets of patches that are only correct together, so they get one switch each

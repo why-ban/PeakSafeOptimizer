@@ -429,17 +429,20 @@ namespace PeakSafeOptimizer.Infrastructure
 
             CompatibilityLevel level = definition.Compatibility;
 
-            if (definition.RequiresCertifiedBuild && !(_fingerprint?.IsCurrent ?? false))
-            {
-                status.Add(new PatchStatusEntry(
-                    name,
-                    true,
-                    PatchResult.SkippedUncertifiedBuild,
-                    "requires the audited Assembly-CSharp MVID until a method-level behavioral fingerprint exists",
-                    level));
-                return;
-            }
-
+            // No MVID gate here on purpose. An earlier revision returned at this point whenever the
+            // running Assembly-CSharp was not the audited build, and because almost every module
+            // passed requireCurrentMvid: true, a single game patch silently skipped nearly the whole
+            // plugin - before any patch had a chance to check whether the members it actually reads
+            // still had the audited shape. That is the opposite of what the structural validation
+            // below exists for, and it made every game update a release event.
+            //
+            // Structural validation is now the only gate: Initialize asserts the exact shape of every
+            // game member the patch reads or writes, ResolveTarget asserts the target's own signature,
+            // and either one failing yields SkippedStructureMismatch for that patch alone. What this
+            // does not catch is a method body whose members kept their shape but whose semantics
+            // changed; that is caught by re-auditing against a fresh decompile, and the MVID is
+            // reported in the startup log precisely so a reader can tell whether such an audit has
+            // been done for the build they are on.
             try { definition.Initialize(); }
             catch (Exception ex)
             {

@@ -10,19 +10,24 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Full equivalent replacement of UIPlayerNames.UpdateName(int, Vector3, bool, int) (audited
-    /// source UIPlayerNames.cs:34-82). Screen position and all gameplay/UI state transitions remain
-    /// ordered as in vanilla. Image.sprite, GameObject.SetActive and CanvasGroup.alpha are only
-    /// written when their target differs. Host ownership is read once on the visible non-muted path.
-    /// Per-instance state is a ConditionalWeakTable whose value never references its UIPlayerNames
-    /// key; it tracks the last sprite written per PlayerName slot.
+    /// Full equivalent replacement of UIPlayerNames.UpdateName(int, Vector3, bool, int). Screen position
+    /// and all gameplay/UI state transitions remain ordered as in vanilla. Image.sprite,
+    /// GameObject.SetActive and CanvasGroup.alpha are only written when their target differs. Host
+    /// ownership is read once on the visible non-muted path. Per-instance state is a
+    /// ConditionalWeakTable whose value never references its UIPlayerNames key; it tracks the last
+    /// sprite written per PlayerName slot.
     ///
-    /// Every game member is also resolved exactly once per call. The audited method indexes
-    /// <c>playerNameText[index]</c> about twenty times and re-reads <c>gameObject</c>,
-    /// <c>characterInteractable</c>, <c>MainCamera.instance.cam</c> and <c>group.alpha</c> along the
-    /// way; <c>gameObject</c> and <c>alpha</c> are native accessors (Component.cs:46-58,
-    /// CanvasGroup.cs:12-22), so the duplicates are real native calls rather than field loads. The
-    /// Prefix hoists each of them into a local and argues the reuse case by case at the point of use.
+    /// The game has since hoisted <c>playerNameText[index]</c> into a local of its own and added a null
+    /// test on it, which is a subset of what this Prefix already did - the twenty repeated array index
+    /// operations it used to perform are gone. The remaining redundancy this Prefix removes is the
+    /// native accessors: the current body still reads <c>playerName.gameObject</c> up to four times,
+    /// <c>group.alpha</c> twice on the invisible path, and <c>MainCamera.instance.cam</c> once per call,
+    /// and it still writes sprite / SetActive / alpha unconditionally. Those are the writes and native
+    /// calls this patch elides.
+    ///
+    /// The new null test is reproduced below (the <c>name == null</c> deferral), and it is a Unity alive
+    /// test on the same reference, so a slot whose widget was destroyed is handled the same way in both
+    /// - vanilla returns, this Prefix hands the call back to vanilla which returns.
     /// </summary>
     internal static class PlayerNameUiWritesPatch
     {
@@ -329,19 +334,33 @@ namespace PeakSafeOptimizer.Patches.Scale
             bool isMuted = false;
             if (visible)
             {
-                // The audited original reads the Photon owner and audio level after its first UI
-                // writes. Any exception in that chain must reproduce through the untouched original,
-                // so it is caught here and handed back before this patch writes anything.
+                // Vanilla reads the Photon owner and the audio level after its first UI writes. Any
+                // exception in that chain must reproduce through the untouched original, so it is caught
+                // here and handed back before this patch writes anything.
                 //
-                // Why this catch is believed unreachable in practice, while still being kept: the
-                // chain is Character.player (a PlayerHandler dictionary lookup, Character.cs:201) into
-                // NetworkingUtilities.GetUserId, which dereferences photonView.Owner.UserId. Owner is
-                // only ever null when PhotonNetwork.CurrentRoom is null (PhotonView.cs:157), i.e.
-                // outside a room - and UpdateName is only reached from IsLookedAt.Update
-                // (IsLookedAt.cs:44), whose component disables itself on the local character
-                // (IsLookedAt.cs:22-26) and whose Start already required GUIManager.instance. That is
-                // an argument about which scenes reach here, not a proof, so the catch stays and the
-                // diagnostic stays with it. It has never been observed in the shipped logs.
+                // The chain got longer in this build and the catch is now doing real work rather than
+                // guarding a theoretical case. NetworkingUtilities.GetUserId used to be a single
+                // photonView.Owner.UserId read; it now dereferences Player.character.data, and on a
+                // first call for a player it reads photonView.Owner.CustomProperties and runs
+                // ulong.Parse on the stored value. Player.character, the Owner and the parse are three
+                // independent throw sites where there used to be one.
+                //
+                // GetUserId also became side-effecting: on that first call it caches the parsed id into
+                // CharacterData.userID. That is why the call stays exactly where vanilla makes it, on
+                // the visible path only and only for a Unity-alive characterInteractable - the
+                // interactable-null deferral above is what guarantees the second half, because vanilla
+                // reaches GetUserId through a `(bool)characterInteractable &&` short circuit on the same
+                // reference. The caching write is idempotent and order-independent with respect to
+                // everything else here, so performing it before this patch's UI writes rather than after
+                // them, as vanilla does, is not observable: a handed-back call re-runs GetUserId, finds
+                // the id already cached and returns the same string.
+                //
+                // The one visible difference is a log line. When the player has no UserID custom
+                // property GetUserId writes a Debug.LogError and leaves the id at 0; if this Prefix then
+                // defers on the owner lookup below, vanilla runs the whole method again and logs it a
+                // second time. That is a duplicated diagnostic in a state that is already broken, and
+                // the alternative - deferring before calling GetUserId at all - would give up the patch
+                // on every visible name.
                 try
                 {
                     otherPlayer = other.player;
@@ -351,6 +370,9 @@ namespace PeakSafeOptimizer.Patches.Scale
                         return true;
                     }
 
+                    // GetUserId now returns CharacterData.userID.ToString(), which cannot be null. The
+                    // test is kept because it costs one branch and is what makes the following line
+                    // safe if the accessor ever goes back to returning Owner.UserId, which could.
                     string userId = NetworkingUtilities.GetUserId(otherPlayer);
                     if (userId == null)
                         return true;

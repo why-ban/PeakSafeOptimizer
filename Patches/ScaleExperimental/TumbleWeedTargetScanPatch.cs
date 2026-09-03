@@ -11,7 +11,7 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Chase-direction reuse for TumbleWeed.FixedUpdate (audited source TumbleWeed.cs:34-46):
+    /// Chase-direction reuse for TumbleWeed.FixedUpdate:
     ///
     ///   if (photonView.IsMine) {
     ///       Vector3 dir = -Vector3.right;
@@ -20,10 +20,20 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///       rig.AddForce(dir * rollForce, ForceMode.Acceleration);
     ///   }
     ///
-    /// GetTarget (TumbleWeed.cs:48-66) walks Character.AllCharacters every physics step and runs one
-    /// Vector3.Angle plus one Vector3.Distance per character, so the desert cost is
-    /// O(tumbleweeds x players) at 50Hz. This is the only Mesa-specific per-tick scan the audit
-    /// found, and the user confirmed tumbleweeds measurably affect the framerate there.
+    /// GetTarget walks Character.AllCharacters every physics step and runs one Vector3.Angle per
+    /// character, so the desert cost is O(tumbleweeds x players) at 50Hz. This is the only
+    /// Mesa-specific per-tick scan the audit found, and the user confirmed tumbleweeds measurably
+    /// affect the framerate there.
+    ///
+    /// The game has since optimized GetTarget itself: it seeds the bound with 90000f (= 300 squared),
+    /// compares Vector3.SqrMagnitude instead of Vector3.Distance, and hoists its own transform.position
+    /// out of the loop. That removes one sqrt per candidate but leaves the two things that dominate the
+    /// scan, so this patch still pays for itself:
+    ///   - Vector3.Angle is still evaluated for every character on every tick, and it costs a sqrt, a
+    ///     dot and an Acos. The throttle below skips it on four ticks out of five.
+    ///   - the optimized GetTarget still reads allCharacter.Center twice for every candidate that
+    ///     passes the angle gate (once inside the Angle call, once for the SqrMagnitude), and Center is
+    ///     a dictionary lookup plus two native transform calls. TryFindTarget below reads it once.
     ///
     /// What this Prefix changes: the *target solve* runs once every N physics ticks per tumbleweed
     /// (default 5, ~0.1s) and the resolved target is reused in between. What it does not change: the
@@ -34,8 +44,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///
     /// OnCollisionEnter, the Fall/AddForceAtPosition/AddThorn chain and the IgnoreTarget coroutine are
     /// untouched, and a non-owned tumbleweed still does nothing (the audited IsMine gate is
-    /// reproduced). The scan itself also switches to squared distance, which is exact for the audited
-    /// `num2 &lt; num` comparison over non-negative distances.
+    /// reproduced). The scan itself compares squared distances against the squared 300f bound, which is
+    /// what the current GetTarget does as well.
     ///
     /// Declared default-on exception (the second one in this project, after ExplosionScale): this
     /// patch is NOT behaviourally equivalent and is still enabled by default.
@@ -44,10 +54,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// the tumbleweed keeps steering towards the previously chosen character, so a newly appearing
     /// closer or better-angled target is adopted at the next solve instead of immediately - at worst
     /// <see cref="Interval"/> physics ticks later when it appears just after a solve, i.e. 5 ticks or
-    /// 0.1s at the game's default 50Hz fixed step. Vanilla re-picks every tick (TumbleWeed.cs:40).
-    /// Nothing else changes: the same magnitude of force is applied on every tick (TumbleWeed.cs:45),
-    /// and the scan predicate, the 300f bound and the maxAngle gate are the audited ones
-    /// (TumbleWeed.cs:49-66).
+    /// 0.1s at the game's default 50Hz fixed step. Vanilla re-picks every tick. Nothing else changes:
+    /// the same magnitude of force is applied on every tick, and the scan predicate, the 300f bound and
+    /// the maxAngle gate are the ones TumbleWeed.GetTarget uses.
     ///
     /// Why the 0.1s of target lag is judged acceptable enough to ship on:
     ///   1. The direction is recomputed every tick from the cached target's *current* Center (the
@@ -109,7 +118,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             FieldInfo maxAngleField = ScaleValidation.RequireInstanceField(
                 typeof(TumbleWeed), "maxAngle", typeof(float));
 
-            // Proof that the audited scan is still the one being replaced.
+            // Proof that the scan being replaced is still the one this patch was written against.
             ScaleValidation.RequireInstanceMethodByTypeNames(
                 typeof(TumbleWeed), "GetTarget", "Character", Array.Empty<string>());
             ScaleValidation.RequireStaticField(typeof(Character), "AllCharacters", typeof(List<Character>));
@@ -120,8 +129,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(TumbleWeed), "transform", typeof(Transform));
             ScaleValidation.RequireStaticMethod(
                 typeof(Vector3), "Angle", typeof(float), new[] { typeof(Vector3), typeof(Vector3) }, true);
+            // GetTarget now bounds on Vector3.SqrMagnitude rather than Vector3.Distance. Assert the
+            // overload the game calls; this Prefix calls the sqrMagnitude property SqrMagnitude
+            // forwards to, so both members are asserted.
             ScaleValidation.RequireStaticMethod(
-                typeof(Vector3), "Distance", typeof(float), new[] { typeof(Vector3), typeof(Vector3) }, true);
+                typeof(Vector3), "SqrMagnitude", typeof(float), new[] { typeof(Vector3) }, true);
+            ScaleValidation.RequireInstanceProperty(typeof(Vector3), "sqrMagnitude", typeof(float));
             // The shared physics-step index this patch throttles on.
             ScaleValidation.RequireStaticProperty(typeof(Time), "fixedTimeAsDouble", typeof(double));
 
@@ -273,8 +286,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 Vector3 delta = candidate.Center - position;
                 if (Vector3.Angle(-Vector3.right, delta) > maxAngle)
                     continue;
-                // Squared comparison is exact for the audited `distance < best` over non-negative
-                // distances, and the 300f initial bound squares without overflow.
+                // Same comparison TumbleWeed.GetTarget now performs: Vector3.SqrMagnitude of the same
+                // delta against a bound seeded with 300 squared. delta is reused rather than reading
+                // candidate.Center a second time, which is what GetTarget does; Center resolves to a
+                // transform position and cannot move between two reads inside one physics step, so the
+                // value is identical and one dictionary lookup plus two native transform calls are
+                // saved per candidate that passes the angle gate.
                 float distanceSqr = delta.sqrMagnitude;
                 if (distanceSqr < bestSqr)
                 {

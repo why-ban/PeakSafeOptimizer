@@ -34,8 +34,10 @@ namespace PeakSafeOptimizer.Infrastructure
         /// <summary>The patch's own IL match / IL generation rejected this game build.</summary>
         SkippedIlMismatch,
         /// <summary>
-        /// The patch replaces audited behavior and therefore only runs when the game build MVID is
-        /// certified. Structural-only guards may still validate and run on an unknown build.
+        /// Retired. The installer used to return this for any patch registered with
+        /// requireCurrentMvid on a build whose MVID was not the audited one; that gate is gone, so
+        /// nothing produces this result any more. Kept so the enum's other values keep their meaning
+        /// and so an old log line still reads correctly.
         /// </summary>
         SkippedUncertifiedBuild,
         /// <summary>
@@ -99,8 +101,9 @@ namespace PeakSafeOptimizer.Infrastructure
         /// * SkippedDisabled / SkippedNoDefinition / SkippedAlreadyInstalled / SkippedNotInstalled:
         ///   nothing was attempted, and nothing is wrong. (SkippedAlreadyInstalled means the live
         ///   record from a previous install still stands.)
-        /// * SkippedStructureMismatch / SkippedIlMismatch / SkippedUncertifiedBuild: the patch's own
-        ///   compatibility verdict about this game build. Warning-level, not error-level.
+        /// * SkippedStructureMismatch / SkippedIlMismatch: the patch's own compatibility verdict about
+        ///   this game build. Warning-level, not error-level. (SkippedUncertifiedBuild is retired and
+        ///   no longer produced.)
         /// * SkippedGroupIncomplete: a sibling on the same switch could not install, so this member
         ///   was withdrawn or never attempted. Not this member's fault, hence Skipped.
         /// * FailedFactory / FailedInitialize / FailedResolve / FailedHarmonyMethod / FailedPatch /

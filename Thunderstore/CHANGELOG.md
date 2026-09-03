@@ -1,5 +1,98 @@
 # Changelog
 
+## 1.4.0
+
+The game shipped a low-level update: it now does a batch of its own performance work, plus a console
+port. Assembly-CSharp's MVID moved, and three of this mod's patches were made redundant by the game
+itself. 41 patches and 37 switches, 35 on by default, down from 44 / 40 / 38.
+
+### The MVID gate is gone, and that is the headline
+
+Until 1.3.0 the installer had this, ahead of every patch's own validation:
+
+    if (definition.RequiresCertifiedBuild && !fingerprint.IsCurrent) return;
+
+43 of the 44 patch modules set that flag. So one game update silently skipped almost the entire mod -
+*before* a single patch got to check whether the members it actually reads had changed shape. That is
+the opposite of what the per-patch structural validation exists for, and it turned every game update
+into a release event. Removed.
+
+The only gate now is each patch's own `Initialize` assertions plus its target signature check: shapes
+match and it installs, shapes differ and that one patch reports `SkippedStructureMismatch`. The MVID
+is demoted to a log label and `CompatibilityLevel` is demoted to a re-audit priority.
+`SkippedUncertifiedBuild` is no longer produced by anything.
+
+The cost, stated plainly: structural validation proves that member shapes are unchanged, not that
+method bodies still mean the same thing. Only re-reading a fresh decompile catches the second kind, so
+`structural-validation` in the log should be read as "nobody has re-read this build yet - start with
+the Fingerprint and StrictIl patches".
+
+### Three patches removed, because the game now does their job
+
+- **GenericOptimizerRange.** `AnyCharacterWithinRange` now squares the range, indexes the list and
+  hoists `transform.position` out of the loop - exactly the three things this patch did. Worse, the
+  game gave `GenericOptimizer` a *private* cached transform property, which this assembly cannot bind
+  to, so C# member lookup falls through to `Component.transform`: the patch became one extra native
+  call per instance per frame in exchange for nothing. There are 2133 instances.
+- **StatusEmitterScan.** `StatusEmitter` now caches its transform and computes the distance once;
+  `Update()` does not even call `InRange()` any more. Counted call for call, the replacement makes the
+  same number of native calls and the same one square root as vanilla, and adds a Harmony wrapper
+  frame, three delegate null checks, a try/catch region and two FieldRef invocations. Net negative.
+- **RagdollPhysicsMats.** `CharacterRagdoll.FixedUpdate` now guards `SetPhysicsMats()` with
+  `if (character.IsLocal)`, so this redundancy filter can only save one character's worth of native
+  material writes instead of every character's. It was the most complex patch in its lane (a
+  ConditionalWeakTable, a two-phase pending/promote signature and a 300-frame / 5-second material
+  audit); that trade no longer holds.
+
+### Adapted to the new build
+
+Four real behavioural deviations and one logic gap:
+
+- **RemoteClusterAnimationThrottle** called `SetPhysicsMats` on every tick, evaluating or not. Vanilla
+  no longer calls it for remote characters, and remote characters are the only ones this patch touches,
+  so continuing to call it would be *adding* per-step native `col.sharedMaterial` writes the game no
+  longer performs. Both call sites, the accessor, the delegate and the
+  `set-physics-mats-failed` diagnostic are gone.
+- **IsLookedAtScan.** `UIPlayerNames.Init` changed from returning an `int` to taking an `Action<int>`
+  callback - the one assertion in the whole plugin that would now fail, which after the gate removal
+  means the patch would be skipped rather than silently wrong. `Update()` also hoists the
+  blind/struggling test to the top and returns early, so the replacement follows, and the camera null
+  check moved below that gate: otherwise a null camera while blind would hand the method back, where
+  vanilla never touches the camera and cannot throw.
+- **BarAfflictionLayout.** The game added `size == 0f -> width = 0f` and an `Approximately` snap. The
+  old predicate only forecast the `Lerp`, so it would skip a write that should have snapped `width` to
+  `size`. Rewritten branch for branch, and the float equality is now a bit comparison, because
+  `-0f == +0f` would drop a real write.
+- **GenericOptimizerRange** (confirmed on the way out): the patch's `candidate == null -> continue`
+  was itself a deviation. Both the old and the new vanilla loop dereference `character.data`
+  unguarded, so a null element throws in both.
+- **RemoteRagdollLod** gained `data.carrierCondor != null` in its never-downgrade list. That field is
+  new: a character being carried by a condor keeps `currentRagdollControll` at 1, so it passes the
+  control threshold, while the condor takes it far past 60m - and none of the three existing carry
+  conditions could see it. Such a character would have gone limp mid-flight.
+
+Verified as harmless: `Bodypart`'s `SetPositionAndRotation` merges and the dropped `isKinematic` guard
+in `FollowRotation_Rotation` (that guard was dead code - its only caller returns early when kinematic);
+`CharacterMovement.FixedUpdate` hoisting four `currentRagdollControll` multiplications out of the loop;
+the new `AdjustDrag` (`AdjustDrag(1f) == 1f` exactly, and its preimage is unique, so
+`BodypartDragIdentity`'s identity test is unaffected); `ConfigureIK` evaluating the left hand first now
+(so `IKItemGuard`'s two per-side reasons swap roles); the `ItemPhysicsSyncer.FixedUpdate` rewrite; and
+the squared-distance rewrites in `TumbleWeed.GetTarget` and `GenericOptimizer`.
+
+Every remaining patch's `Initialize` assertions were checked against the shipped DLL with
+`System.Reflection.Metadata` rather than against decompiled text. Apart from that one `Init` signature,
+all of them still pass.
+
+### Comment convention change
+
+There were roughly 450 `File.cs:NNN` references in the comments. A game update invalidates all of them
+at once, and re-anchoring them had grown more expensive than the code fixes. New convention: **name the
+type and the method, not the line**. Existing line references are left as historical coordinates rather
+than re-anchored one by one.
+
+None of the above is verified in game. See TESTING.md; the 1.4.0 acceptance points are at the top of
+its final section.
+
 ## 1.3.0
 
 Still 44 patches and 40 switches, 38 on by default. Seven concurrent read-only audits over the whole

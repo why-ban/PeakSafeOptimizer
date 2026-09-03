@@ -1,4 +1,4 @@
-# PeakSafeOptimizer 1.3.0
+# PeakSafeOptimizer 1.4.0
 
 PEAK 的 BepInEx 5 插件，用于修复已确认的空引用/越界异常，并针对**多人玩家数量**与**地面物品数量**带来的每帧重复计算做保守削减。
 
@@ -10,9 +10,9 @@ PEAK 的 BepInEx 5 插件，用于修复已确认的空引用/越界异常，并
 
 | 项目 | 值 |
 |---|---|
-| Assembly-CSharp MVID | `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1` |
-| Assembly-CSharp SHA-256 | `b5c1b8b73f82cca847942b0be758dd554fe347d1a7c89c69e292fafb115bfffd` |
-| 插件版本 | `1.3.0` |
+| Assembly-CSharp MVID | `c88cc526-8d4e-40fa-afdb-e24e4c233bd0` |
+| Assembly-CSharp SHA-256 | `21cbf3a6585a72778a2e5fb007e36ca246002da5ae8209a6d998673633d82759` |
+| 插件版本 | `1.4.0` |
 
 SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerprint.Capture()` 在启动时读取游戏 Assembly-CSharp 的 `ModuleVersionId` 得到。
 
@@ -21,23 +21,28 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 当前版本的关键变化：**MVID 不是全局硬门控，而是逐补丁的兼容条件**。结构级守卫可以在未知构建上继续自验；完整替换、网络语义改写和 Transpiler 在尚未提供方法级行为指纹前只在审计 MVID 上安装。
 
 - 启动时读取游戏 Assembly-CSharp 的 MVID 并与其 SHA-256 一起输出一行指纹日志。
-- MVID 与审计值 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1` 一致 → 兼容模式为 **`certified`**。
+- MVID 与审计值 `c88cc526-8d4e-40fa-afdb-e24e4c233bd0` 一致 → 兼容模式为 **`certified`**。
 - MVID 不一致（游戏更新或不同构建）→ 兼容模式为 **`structural-validation`**。
-- 两种模式下每个补丁仍独立报告；`Structural` 补丁执行自身验证，`Fingerprint`/`StrictIl` 补丁在未知 MVID 上以 `SkippedUncertifiedBuild` 安全跳过。局部游戏更新只会使相关补丁各自 fail-closed，不再让整个模组失效。
+- **1.4.0 起 MVID 不再门控任何补丁。** 它只是一个标签，含义是「这个构建有没有人逐行重读过」。是否安装完全由每个补丁自己的
+  `Initialize` 结构断言与目标签名断言决定：形状符合就装，不符合就单独报 `SkippedStructureMismatch`。
+  1.3.0 及以前有一道硬门——43 个补丁写了 `requireCurrentMvid: true`，而那个参数会在结构验证**之前**就直接返回，
+  于是游戏一更新就几乎整个插件被静默跳过，这与结构验证的存在意义正好相反，也让每次游戏更新都变成一次发布事件。已删除。
+- 结构验证抓不到的是「成员形状没变但方法体语义变了」。这只能靠对着新反编译源重读来发现，所以看到 `structural-validation`
+  时，应优先复查下表里 `Fingerprint` 与 `StrictIl` 等级的补丁。
 
-每个补丁声明一个 `CompatibilityLevel`（严格度递增）：
+每个补丁声明一个 `CompatibilityLevel`。它现在是**复查优先级**而非安装门控：
 
 | 等级 | 含义 | 本项目的典型形态 |
 |---|---|---|
-| `Structural` | 结构自检通过即可运行，仅依赖 `Initialize` 校验的成员形状 | 简单 FieldRef / null guard（仅 `RunBasedValues`） |
-| `Fingerprint` | 当前为结构自检 + 审计 MVID；补齐方法级行为指纹后才可放开未知构建 | 大多数完整替换/守卫 Prefix |
-| `StrictIl` | 当前为审计 MVID + 唯一 IL 匹配、标签/异常块安全与生成后校验 | Transpiler 与网络面（Photon 所有权/RPC 语义）改写 |
+| `Structural` | 依赖的全部是 `Initialize` 能校验的成员形状，结构验证确实充分 | 简单 FieldRef / null guard（仅 `RunBasedValues`） |
+| `Fingerprint` | 完整替换 Prefix：形状相符不等于替换体仍然等价，游戏更新后要重读 | 大多数完整替换/守卫 Prefix |
+| `StrictIl` | 正确性还依赖 Photon 所有权/RPC 语义或形状检查表达不了的 IL，复查优先级最高 | 网络面改写 |
 
 补丁失败时单独跳过并分类（不连坐）：
 
 - `SkippedStructureMismatch`：`Initialize` 结构校验（成员缺失/变形）拒绝当前构建。
 - `SkippedIlMismatch`：IL 匹配或 IL 生成拒绝当前构建。
-- `SkippedUncertifiedBuild`：补丁尚未具备方法级行为指纹，当前 MVID 未认证。
+- `SkippedUncertifiedBuild`：**已废弃**，1.4.0 起不再产生（旧日志里出现过）。
 - `FailedInitialize` / `FailedPatch`：真正的初始化或安装故障。
 - 其余见 `SkippedDisabled`（配置关闭）等。
 
@@ -58,7 +63,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 仍未完成：多人压力基准、长时稳定性、性能基准。本文不提供任何帧率数字。
 
-## 已注册补丁（44 个补丁 / 40 个开关）
+## 已注册补丁（41 个补丁 / 37 个开关）
 
 配置文件里的每一个开关都对应真实注册的补丁，不存在只显示不生效的键。下表「默认」列均为开关默认值。
 
@@ -71,9 +76,9 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 默认关闭的项（**6 个补丁 / 3 个开关**）：`Experimental.RemoteRagdollLod`（一个开关 = 4 个补丁，远距姿态凝固）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`（远端动画 25Hz 步进）。另有两条默认关闭的非 Harmony 车道 `Graphics.CapBoneWeights`（关节形变变糙）与 `Experimental.CollisionCallbackReuse`（进程级引擎标志），它们不是补丁开关，不计入 44 个补丁 / 40 个开关。
 
-**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 44 个补丁对应 40 个开关。
+**必须协同的补丁合并为一个开关**，避免半开状态看起来受支持却不是：`Experimental.RemoteRagdollLod` 管 4 个补丁（它们共用同一份距离层级判定，只开其中几个会让远端角色一边跳过动画图求值、一边仍被驱动向动画目标，这不是任何一档被论证过的状态）；`Fixes.SnowballContactGuard` 管 2 个补丁（一个写快照、一个读快照，单开任一方都无意义）。因此 41 个补丁对应 37 个开关。
 
-**下面按优化性质分节（稳定性 / 等价 / 规模化 / 聚集专项 / 远端实验），与源码目录不是一对一**，所以小节标题只声明项数、不声明目录。按 `context.Register(PatchId.…)` 统计，四个目录的实际注册数是：`Patches\Stability` 7 个、`Patches\Scale` 23 个、`Patches\ScaleExperimental` 13 个、`Patches\Equivalent\MathAndScan` 1 个，合计 44 个。两者错位的例子：`StatusEmitterScan` 在本文归入「稳定性修复」，实现却在 `Patches\Scale`。下面 8 个小节的补丁项数合计同样是 44（8 + 1 + 7 + 6 + 8 + 4 + 5 + 5）；最后一节另有 2 行是非 Harmony 车道，不是补丁，不计入这 44。
+**本文按优化性质分节（稳定性 / 等价 / 规模化 / 聚集专项 / 远端实验），与源码目录不是一对一**。各小节标题只给项数不给目录；按目录统计 `context.Register(PatchId.…)`，四个目录的实际注册数是：`Patches\Stability` 7 个、`Patches\Scale` 20 个、`Patches\ScaleExperimental` 13 个、`Patches\Equivalent\MathAndScan` 1 个，合计 41。
 
 ### 稳定性修复（8 项，全部默认开启）
 
@@ -86,7 +91,6 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | `Fixes.EmoteWheelGuard` | `true` | Fingerprint | Prefix：`GUIManager.UpdateEmoteWheel()` | **只在原版真会解引用空值的那一帧跳过**。原版有两处短路：`canEmote` 在 `data.dead` 时提前返回、不读 `refs.stats`；`canEmote && input.emoteIsPressed` 在 `canEmote` 为假时不碰 `input`。这两种帧原版不抛异常，而是落入 `else if (usingEmoteWheel)` 把表情轮**关掉**。1.1.0 把这条关闭分支一起跳过了，使 `usingEmoteWheel` 锁死，连带暂停菜单、光标锁定与一个移动门控卡住——这是 1.2.0 修掉的功能性回归。现在精确复刻两处短路，其余一律放行。只读不写。 |
 | `Fixes.BinocularSunGuard` | `true` | Fingerprint | Prefix：`Action_ShowBinocularOverlay.TestLookAtSun()` | 举起望远镜时该方法每帧执行，而原版的 guard clause 只判了 `localCharacter`，随后无保护地解引用 `Singleton<MapHandler>.Instance`、`DayNightManager.instance.sun`，以及 guard clause **之后**的 `MainCamera.instance`、`localCharacter.Center`（走 `partDict` 直索引，可抛 `KeyNotFoundException`）与 `Singleton<AchievementManager>.Instance`（`Action_ShowBinocularOverlay.cs:40-55`）。实测单局 1544 次逐帧空引用。守卫补齐这五处，并**先复刻原版的 guard clause**（biome、日照强度）再检查其后三项，避开非方山/夜间下的诊断假阳性。跳过的唯一后果是该帧不做天文成就判定。 |
 | `Fixes.ItemOptimizerDeregisterGuard` | `true` | Fingerprint | Prefix：`Peak.ItemOptimizationManager.DeregisterItem(Item)` | 原版 `ItemOptimizer.OnEnable` 在 item 为 null 时写 `enabled = false`，该写入同步触发 `OnDisable`，后者拿同一个 null 去 `Dictionary.Remove` 并抛 `ArgumentNullException`（`ItemOptimizer.cs:9-24`）。实测 67 次。null 键本就不在字典里，跳过不丢任何条目。 |
-| `Fixes.StatusEmitterScan` | `true` | Fingerprint | Prefix（完整替换）：`StatusEmitter.Update()` | 沼泽/丛林的孢子毒气伤害体积，场景里**每个实例每帧无条件执行**，自身没有距离门控。原版每帧 2–4 次开方距离 + 2–4 次 `partDict` 字典查找解析 `localCharacter.Center`，命中范围时还要做一次字符串键字典查找。本版把 Center 与距离每次调用各只解一次并复用，重叠优先级字典从 `ContainsKey` + 三次索引器降为一次 `TryGetValue`。**距离仍是真实开方**：平方比较在阈值附近的舍入带内与开方不同侧，而那一侧是真实伤害 tick（1.1.0 已从平方比较撒回）。资产解码确认全库 1571 个 `StatusEmitter` + 108 个 `WindAffectedStatusEmitter`，且无任何距离门控（`GenericOptimizer` 只挂在弓箭发射器与食人花上）。伤害公式、`debug` 字段写入与 `AddStatus`/`SubtractStatus` 逐行复刻（含原版复用 `amount` 而非衰减后 `num` 这一处，照抄不改）。`InRange` 是 virtual，Initialize 会扫描全部子类确认无人 override，否则 fail-closed。 |
 
 ### 等价改写（1 项）
 
@@ -99,9 +103,7 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 | 配置键 | 默认 | 兼容等级 | Harmony / 目标 | 作用与风险 |
 |---|---:|---|---|---|
 | `Fixes.HeatEmissionScan` | `true` | StrictIl | Prefix（完整替换）：`CharacterHeatEmission.Update()` | 距离判定平方化，等价替换原方法。网络面（读 `photonView.IsMine`），故升级为 StrictIl。 |
-| `Fixes.RagdollPhysicsMats` | `true` | Fingerprint | Prefix：`CharacterRagdoll.SetPhysicsMats()` | 输入签名未变时跳过原方法。签名含摩擦类型、部件/碰撞体计数、材质引用与**每个 Bodypart 全部 collider 的材质 ID**，另有每 300 帧/5 秒强制放行自愈。 |
 | `Fixes.ItemCollisionMode` | `true` | Fingerprint | Prefix：`Item.UpdateCollisionDetectionMode()` | 目标值仍由 `itemState` 决定，仅当 Rigidbody 已是目标值时跳过赋值。 |
-| `Fixes.GenericOptimizerRange` | `true` | Fingerprint | Prefix：`GenericOptimizer.AnyCharacterWithinRange(float)` | 平方距离等价。资产解码确认全库 2133 个 `GenericOptimizer` 实例的 `rangeToDisableScripts` **全部被序列化值覆写为有限值**（弓箭发射器 82m、食人花 60m），代码里的 `float.PositiveInfinity` 只是字段默认值。所以这是每帧每实例每玩家的真实距离比较，平方化有实际收益（旧版注释说「仅增加薄封装」是错的）。 |
 | `Fixes.CampfireProtectionMerge` | `true` | Fingerprint | Prefix：`Campfire.ApplyCampfireProtection()` | 把同帧两次全量扫描合并为一次，单次扫描同时得出 `everyoneInRange` 与 `_charactersInRadius`，再复用于 OrbFogHandler 写入与 buff 分支。 |
 | `Experimental.ZombieScanRange` | `true` | Fingerprint | Prefix：`MushroomZombie.ReadyToDisable()` | 主机侧每帧调用。平方距离 + 两标记都真后提前结束循环；阈值非正回退原方法。 |
 | `Experimental.ZombieSpawnScanRange` | `true` | Fingerprint | Prefix：`MushroomZombieSpawner.ReadyToSpawn()` | 主机侧每帧调用。单阈值平方化，命中即返回；阈值负时回退。 |
@@ -174,10 +176,70 @@ SHA-256 是审计记录值，不参与运行时判断。MVID 由 `BuildFingerpri
 
 这条车道的取舍原则：**只覆盖游戏画质菜单没有提供的项，且不默认改变画面**。每顶点骨骼数在 `Assembly-CSharp` 里没有对应设置类，玩家无从调整，所以由补丁提供开关——但默认关闭，因为降低骨骼权重会让关节处的形变变糙。曾经这里还有一项强制关闭 MSAA（游戏同样没有抗锯齿设置），已移除：关抗锯齿是画面决定，应该由玩家做。阴影距离与级联数曾经也在这里，已移除——游戏自带「阴影距离」设置写的就是这两个值（`ShadowDistanceSettings.cs:17-41`，200/150/75/0 配 2/2/1/1），压它们等于偷偷覆盖玩家已经做过的选择，而且强制单级联会让远处阴影随移动漂移（级联包围球每帧跟着相机重新拟合、没有 texel 对齐）。玩家嫌卡自己调档位即可。
 
+## 1.4.0 修复的问题（变更说明）
+
+游戏做了一次底层更新（官方自己做了一批性能优化，外加主机版移植），Assembly-CSharp 的 MVID 从
+`3f24c13b-…` 变为 `c88cc526-…`。本版做三件事：拆掉 MVID 硬门、把被官方改动打到的补丁适配到新版、
+删掉三个收益已被官方吃掉的补丁。
+
+**拆掉 MVID 硬门（最重要的一条）。** 1.3.0 及以前，`PatchInstaller` 在结构验证**之前**有一句
+`if (definition.RequiresCertifiedBuild && !fingerprint.IsCurrent) return;`，而 44 个补丁里有 43 个写了
+`requireCurrentMvid: true`。于是游戏一更新，几乎整个插件在任何补丁有机会检查「我读的成员是否真的变了」
+之前就被静默跳过——这与结构验证的存在意义正好相反，也让每次游戏更新都变成一次必须发版的事件。该门已删除。
+现在唯一的门是每个补丁自己的 `Initialize` 结构断言与目标签名断言：形状符合就装，不符合就单独报
+`SkippedStructureMismatch`。MVID 降级为日志标签，`CompatibilityLevel` 降级为**复查优先级**。
+`SkippedUncertifiedBuild` 这个结果不再产生。
+
+代价要说清：结构验证只能证明「成员形状没变」，证明不了「方法体语义没变」。后者只能靠对着新反编译源
+重读来发现，所以 `structural-validation` 的正确读法是「这个构建还没人逐行重读过，优先复查
+`Fingerprint` 与 `StrictIl` 等级的补丁」。
+
+**删除三个补丁**（44 → 41，开关 40 → 37，默认开启 38 → 35）：
+
+- `GenericOptimizerRange` —— 官方自己把 `AnyCharacterWithinRange` 改成了平方比较 + 索引循环 +
+  position 提出循环，与本补丁做的事完全相同。更糟的是官方给 `GenericOptimizer` 加了一个 **private**
+  的 transform 缓存属性，插件的程序集绑不到它，C# 成员查找会落到 `Component.transform` —— 于是本补丁
+  变成每帧每实例多一次 native 调用换零收益。2133 个实例。
+- `StatusEmitterScan` —— 官方给 `StatusEmitter` 加了 transform 缓存并把距离合并成一次求值，
+  `Update()` 甚至不再调用 `InRange()`。逐项计数后，本补丁的 native 调用与开方次数与原版**完全相同**，
+  而多出 Harmony 包装帧、三次委托判空、try/catch 帧与两次 FieldRef 调用。净负。
+- `RagdollPhysicsMats` —— 官方把 `CharacterRagdoll.FixedUpdate` 里的 `SetPhysicsMats()` 门控成了
+  `if (character.IsLocal)`，所以这个冗余过滤器现在只能省下一个角色的量（原来是每个角色）。它是这条
+  车道里最复杂的补丁（CWT + 双阶段 pending/promote + 300 帧/5 秒材质审计），收益/复杂度不再成立。
+
+**适配新版的行为偏离（4 处真实偏离 + 1 处逻辑缺口）**：
+
+- `RemoteClusterAnimationThrottle` 在非求值 tick 与替换体里各调一次 `SetPhysicsMats`。新版原版对远端
+  角色**不调**，而这个补丁只处理远端角色 —— 继续调就是新增原版不做的 native `col.sharedMaterial` 写入。
+  两处调用、访问器、委托、诊断名 `set-physics-mats-failed` 一并删除。
+- `IsLookedAtScan`：`UIPlayerNames.Init` 从「返回 int」改成「接收 `Action<int>` 回调」，这是全仓
+  **唯一一条在新版会失败的断言** —— 不改则补丁在拆门之后被 fail-closed 跳过。同时 `Update()` 把
+  `isBlind || isStruggling` 提到最前并提前 return，替换体跟上，并把相机判空下移到该 gate 之后
+  （否则盲/挣扎状态下相机为 null 时会交还，而原版根本不碰相机、不会抛）。
+- `BarAfflictionLayout`：官方新增 `size == 0f → width = 0f` 与 `Approximately → width = size` 两个
+  分支。旧过滤器只预测 `Lerp` 结果，会跳过一次本该发生的吸附写入。谓词逐分支复刻，并把浮点相等换成
+  位比较（`-0f == +0f` 会误跳）。
+- `GenericOptimizerRange`（删除前顺带确认）：旧补丁里的 `candidate == null → continue` 是偏离 ——
+  新旧原版都无条件解引用 `character.data`，null 元素两版都抛。
+- `RemoteRagdollLod` 的不降级列表补上 `data.carrierCondor != null`。新版 `CharacterData` 新增了这个
+  字段：被兀鹫抓走的角色 `currentRagdollControll` 仍是 1、能过控制阈值，同时会被带到远超 60m，
+  而现有三条搬运条件全看不见它 —— 这种角色会在被抓走的过程中变软。
+
+**其余官方改动核实为无影响**：`Bodypart` 的 `SetPositionAndRotation` 合并与 `FollowRotation_Rotation`
+去掉的 `isKinematic` 守卫（那个守卫是死代码：唯一调用者 `Animate` 开头就已经在 kinematic 时提前
+return）、`CharacterMovement.FixedUpdate` 把四个 `currentRagdollControll` 乘法提出循环、新增的
+`AdjustDrag`（`AdjustDrag(1f) == 1f` 精确成立且逆像唯一，所以 `BodypartDragIdentity` 的恒等判定不变）、
+`CharacterAnimations.ConfigureIK` 的左右手求值顺序颠倒（`IKItemGuard` 的两侧记账随之对调）、
+`ItemPhysicsSyncer.FixedUpdate` 的整体重写、`TumbleWeed.GetTarget` 与 `GenericOptimizer` 的平方比较。
+所有 41 个补丁的 `Initialize` 断言都用 `System.Reflection.Metadata` 直读 DLL 逐条核过签名，除上面那条
+`Init` 外全部通过。
+
+**注释约定变更**：此前注释里有约 450 处 `文件.cs:行号` 引用，游戏每更新一次就全部作废，校准成本已超过
+修代码本身。新约定是**只写类名与方法名，不写行号**；已存在的行号引用不再逐条校准，视为历史坐标。
+
 ## 1.3.0 修复的问题（变更说明）
 
-七条只读审计覆盖全插件，随后把其中**能靠读代码判定**的每一项都改掉。补丁数不变：仍是 44 补丁 / 40 开关 /
-默认开启 38。
+七条只读审计覆盖全插件，随后把其中**能靠读代码判定**的每一项都改掉。当时补丁数不变：44 补丁 / 40 开关 / 默认开启 38（1.4.0 已降为 41 / 37 / 35）。
 
 功能性回归（`IKItemGuard` 自诞生起就有）：
 

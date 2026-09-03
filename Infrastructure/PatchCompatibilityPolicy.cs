@@ -4,16 +4,16 @@ using PeakSafeOptimizer.Config;
 namespace PeakSafeOptimizer.Infrastructure
 {
     /// <summary>
-    /// Default compatibility levels for patches that were registered through the legacy
-    /// <c>requireCurrentMvid</c> constructor overload and therefore cannot state their own level yet.
+    /// Re-audit priority for patches registered through the <c>requireCurrentMvid</c> overload. This
+    /// only affects what the startup log reports; nothing here gates installation.
     ///
     /// Inference rules applied by <see cref="PatchDefinition"/>:
-    ///   a Transpiler                  → <see cref="CompatibilityLevel.StrictIl"/>
-    ///   legacy requireCurrentMvid=true→ <see cref="CompatibilityLevel.Fingerprint"/> (full-replacement Prefix)
-    ///   otherwise                     → <see cref="CompatibilityLevel.Structural"/>
-    /// and then, on top of that, the network-facing set below is escalated to StrictIl, because the
-    /// correctness of those replacements depends on Photon ownership / RPC semantics rather than on
-    /// member shapes alone.
+    ///   a Transpiler            → <see cref="CompatibilityLevel.StrictIl"/>
+    ///   requireCurrentMvid=true → <see cref="CompatibilityLevel.Fingerprint"/> (full-replacement Prefix)
+    ///   otherwise               → <see cref="CompatibilityLevel.Structural"/>
+    /// and then the network-facing set below is escalated to StrictIl, because the correctness of those
+    /// replacements depends on Photon ownership / RPC semantics rather than on member shapes alone -
+    /// exactly the kind of thing a shape check cannot notice going wrong.
     /// </summary>
     internal static class PatchCompatibilityPolicy
     {

@@ -6,14 +6,14 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Identity filter for Bodypart.AddMovementForce(float) (audited source Bodypart.cs:290-297):
+    /// Identity filter for Bodypart.AddMovementForce(float) (audited source Bodypart.cs:291-298):
     ///
     ///   if ((bool)character) {
     ///       Vector3 worldMovementInput_Lerp = character.data.worldMovementInput_Lerp;
     ///       AddForce(movementForce * worldMovementInput_Lerp, ForceMode.Acceleration);
     ///   }
     ///
-    /// and AddForce (Bodypart.cs:261-271):
+    /// and AddForce (Bodypart.cs:262-272):
     ///
     ///   if (!rig.isKinematic) {
     ///       if (forceMode == ForceMode.Acceleration) force *= rig.mass;
@@ -21,7 +21,7 @@ namespace PeakSafeOptimizer.Patches.Scale
     ///   }
     ///
     /// Called once per bodypart per physics step for every character
-    /// (CharacterMovement.cs:310), i.e. players x ~100 parts x 50Hz, and the two Rigidbody accesses
+    /// (CharacterMovement.cs:320), i.e. players x ~100 parts x 50Hz, and the two Rigidbody accesses
     /// inside AddForce are native calls. When the force is exactly the zero vector the whole call is
     /// <c>forcesToAdd += Vector3.zero</c>, which leaves every component bit-identical (adding +0 to a
     /// finite value, to an infinity or to a NaN all return the original value; a -0 component would
@@ -29,10 +29,18 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// Rigidbody.AddForce). This Prefix skips exactly that case.
     ///
     /// The zero case is not an edge case, it is the cluster case. GetMovementForce returns 0f for
-    /// anyone whose CheckMovement is false (CharacterMovement.cs:376-392), the caller multiplies it by
-    /// currentRagdollControll, and worldMovementInput_Lerp converges to Vector3.zero for anyone not
-    /// holding a movement key (Character.cs:1340-1342). A lobby standing around a campfire therefore
-    /// hits the identity on every part of every character.
+    /// anyone whose CheckMovement is false (CharacterMovement.cs:390-406), the caller multiplies it by
+    /// currentRagdollControll (:307, hoisted out of the loop in this build), and worldMovementInput_Lerp
+    /// converges to Vector3.zero for anyone not holding a movement key (Character.cs:1336-1342). A
+    /// lobby standing around a campfire therefore hits the identity on every part of every character.
+    ///
+    /// Unaffected by the Bodypart.FollowRotation_Rotation change in this build, and the reason is
+    /// stronger than "different code path". That method lost its `if (!rig.isKinematic)` guard, but the
+    /// guard was dead: FollowRotation_Rotation has exactly one caller, Bodypart.Animate, which opens
+    /// with `if (rig.isKinematic) { SnapToAnim(); return; }`, so rig.isKinematic is provably false by
+    /// the time it runs. Removing it changes no behaviour for anyone. Independently, this patch's
+    /// target does not reach FollowRotation_Rotation at all, and the kinematic filtering its argument
+    /// relies on is the one inside Bodypart.AddForce, which is untouched.
     ///
     /// Anything not provably identity - a non-zero force, a missing character or data, a missing
     /// Rigidbody - defers to the untouched original.

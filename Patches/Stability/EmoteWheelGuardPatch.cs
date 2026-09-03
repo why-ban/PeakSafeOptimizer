@@ -45,9 +45,12 @@ namespace PeakSafeOptimizer.Patches.Stability
     ///
     /// Correctness dependency: computing canEmote here duplicates the vanilla implementation
     /// <c>!data.dead &amp;&amp; !refs.stats.won</c>. If a game update reshapes canEmote, this
-    /// short-circuit model no longer matches. That is held closed by requireCurrentMvid: true in
-    /// EmoteWheelGuardModule.cs, which makes the patch report SkippedUncertifiedBuild on any assembly
-    /// other than the audited one, plus the structural assertion on the canEmote property below.
+    /// short-circuit model no longer matches. What holds that closed is the structural assertion on
+    /// the canEmote property below plus the assertions on data.dead and refs.stats.won: a reshaped
+    /// canEmote that no longer reads those two members fails one of them and the patch is skipped. A
+    /// reshaped canEmote that still reads exactly those two members but combines them differently is
+    /// the residual risk, and it is why this patch is classified Fingerprint - i.e. re-read it against
+    /// a fresh decompile after a game update.
     ///
     /// The members are reported separately, because which one is missing identifies the cause. All
     /// five diagnostics stay reachable, but the new structure narrows what each one means:

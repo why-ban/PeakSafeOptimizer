@@ -34,8 +34,7 @@ namespace PeakSafeOptimizer.Patches.Stability
     /// <c>Singleton&lt;AchievementManager&gt;.Instance</c> (:52). <c>Character.Center</c> is not a
     /// null risk but a KeyNotFoundException risk: it routes through GetBodypart, which indexes
     /// CharacterRagdoll.partDict directly (Character.cs:266,1299-1302) and throws before the ragdoll
-    /// has registered its parts - the same hazard that Patches\Scale\StatusEmitterScanPatch.cs and
-    /// Patches\Scale\ParticleCountCullerWritePatch.cs treat as real. All three are checked here.
+    /// has registered its parts. All three are checked here.
     ///
     /// Ordering matters for diagnostic honesty. The <c>||</c> chain in the guard clause short-circuits,
     /// so a non-Mesa biome or a dim sun makes the original return without ever touching

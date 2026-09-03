@@ -1,16 +1,16 @@
-# PeakSafeOptimizer 1.3.0 集中测试指引
+# PeakSafeOptimizer 1.4.0 集中测试指引
 
-本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 38 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
+本文是一次集中测试的执行清单，目标是在一轮联机里同时验证**默认开启的 35 项等价/修复类补丁**的安全性，并针对「方山 8 人聚集锐减」「8 人以上卡顿」「地面物品过多卡顿」「爆炸卡顿」四个痛点取得可比较的观察结果。
 
 截至当前版本，多人压力基准与长时稳定性测试**尚未完成**；以下均为待执行计划。
 
 ## 0. 测试前准备
 
-1. 确认 Assembly-CSharp MVID 为 `3f24c13b-87b6-4c9f-9c21-3c49b6ad17e1`（`certified` 模式）；如需验证 `structural-validation` 模式，见「MVID 不匹配验证」。
+1. 确认 Assembly-CSharp MVID 为 `c88cc526-8d4e-40fa-afdb-e24e4c233bd0` → 兼容模式 `certified`。**1.4.0 起 MVID 不再门控安装**：不匹配时只是标签变成 `structural-validation`，每个补丁照常按自己的结构断言尝试安装，形状不符才单独 `SkippedStructureMismatch`。
 2. 备份 `BepInEx/config/com.peak.safeoptimizer.cfg`。更新 DLL 时不要删除 cfg；插件本身也不会删除它。布尔补丁开关支持运行时热重载（插件已无任何 Transpiler），但如果只想排除「热重载路径本身有问题」这个变量，仍可以用「改 cfg 后完全退出重启」这条路径复测。
 3. 第一层用出厂默认。44 个补丁 / 40 个开关（`RemoteRagdollLod` 管 4 个补丁、`SnowballContactGuard` 管 2 个，各是一个开关），默认开启 38 个补丁，6 个有观感代价的默认关闭。默认开启项为：
 
-   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`HeatEmissionScan`、`RagdollPhysicsMats`、`ItemCollisionMode`、`GenericOptimizerRange`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`、`BinocularSunGuard`、`ItemOptimizerDeregisterGuard`、`StatusEmitterScan`（共 38 项）。
+   `RunBasedValues`、`Parachute`、`RopeSegmentGuard`、`IKItemGuard`、`EmoteWheelGuard`、`Campfire`、`HeatEmissionScan`、`ItemCollisionMode`、`CampfireProtectionMerge`、`ZombieScanRange`、`ZombieSpawnScanRange`、`WeightRefreshCoalescing`、`SleepingZombieScan`、`ItemScaleRedundantWrite`、`RemoteItemInterpolationThreshold`、`EyeLookComponentCache`、`ExplosionScale`、`ItemDatabaseNameLookup`、`IsLookedAtScan`、`ItemAudioManagerHash`、`BarAfflictionLayout`、`AnimatedMouthMaterial`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites`、`PocketBehaviorGuard`、`BodypartDragIdentity`、`LightVolumeSampleCache`、`TumbleWeedTargetScan`、`BodypartMovementForceIdentity`、`CollisionContactsNoAlloc`、`SnowballContactSnapshot`、`SnowballContactConsume`、`BinocularSunGuard`、`ItemOptimizerDeregisterGuard`（共 35 项）。
 
    **默认关闭的 6 个补丁 / 3 个开关**：`Experimental.RemoteRagdollLod`（一个开关 = `RemoteRagdollLodPhysics`/`Animate`/`MovementForce`/`Animator` 四个补丁）、`Experimental.DetailBodypartThrottle`、`Experimental.RemoteClusterAnimationThrottle`。另有两条默认关闭的非 Harmony 车道 `Experimental.CollisionCallbackReuse` 与 `Graphics.CapBoneWeights`，它们不是补丁开关，既不计入 44 个补丁也不计入 40 个开关（所以「3 个开关」只数上面那三个）。
 
@@ -20,9 +20,9 @@
 
 启动日志逐行均带 `PeakSafeOptimizer |` 前缀，用该关键字过滤可整块取出报告。
 
-- 版本 `1.3.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
+- 版本 `1.4.0`；输出一行 Assembly-CSharp 指纹：`MVID=... expected=... current=... SHA256=...`。
 - 兼容模式行：`compatibility mode: certified`（MVID 匹配）或 `compatibility mode: structural-validation`（MVID 不匹配）。结构级补丁仍验证；当前 `Fingerprint`/`StrictIl` 补丁在未知 MVID 上安全跳过。
-- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=44, enabled=38, applied=38, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
+- 汇总行 `totals:`：出厂默认且 MVID 匹配、全部通过时预期 `registered=41, enabled=35, applied=35, skipped=6, failed=0, module-failures=0`（6 行 `SkippedDisabled` 是默认关闭的观感代价项：4 项 `RemoteRagdollLod*` + `DetailBodypartThrottle` + `RemoteClusterAnimationThrottle`）。
   - 没有只显示不生效的键。`registered - enabled` 应等于默认关闭的 6 项。注意 `registered` 数的是补丁而不是开关：`Experimental.RemoteRagdollLod` 一个开关对应 4 个补丁，`Fixes.SnowballContactGuard` 一个开关对应 2 个。
 - 逐项结果三类行：
   - `applied  : <名称> [<兼容等级>] <目标方法>`（38 行，兼容等级为 Structural/Fingerprint/StrictIl）。
@@ -62,13 +62,13 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 
 回滚顺序：先关最近启用的单项，再逐项关闭默认开启项定位，最后无插件复现确认是否原版问题。
 
-## 2. 第一层：默认配置安全性（默认开启的 38 项）
+## 2. 第一层：默认配置安全性（默认开启的 35 项）
 
 先单人后 1 / 2 / 4 人递增；通过条件是「与原版表现一致 + 无本插件异常」。
 
 ### 2.1 稳定性修复（8 项）
 
-下表 8 行对应 8 个补丁。注意目录归属：其中 7 个实现在 `Patches\Stability`，`StatusEmitterScan`（A8）实现在 `Patches\Scale\StatusEmitterScanPatch.cs`——本节是按「稳定性修复」这个性质分的，不是按目录数的，别去数 `Patches\Stability` 里的文件数来核对。
+下表 7 行对应 7 个补丁，全部注册在 `Patches\Stability`。（`StatusEmitterScan` 原本作为 A8 列在这里，1.4.0 已删除。）
 
 | 步骤 | 补丁 | 内容 | 通过条件 |
 |---|---|---|---|
@@ -79,7 +79,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | A5 | `EmoteWheelGuard` | **1.2.0 重点回归项**：正常开合表情轮；在**已死亡/观战**状态下按住再松开表情键；结算画面（`stats.won`）下同样操作；重生、退出 | 表情轮开合正常，松手后必须**关闭**且光标消失、暂停菜单能打开（1.1.0 在「角色已死 + refs/stats 或 input 缺失」时会把这条关闭分支一起跳过，导致表情轮与光标卡死）。无 `canEmote` NRE。诊断五条 `localCharacter-` / `data-` / `refs-` / `stats-` / `input-unavailable`，记录命中哪一条——新逻辑下 `refs-`/`stats-` 只在角色**存活**时可达，`input-` 只在 `canEmote` 为真时可达 |
 | A6 | `BinocularSunGuard` | 举起望远镜（机场、方山白天、方山夜间、其它图各一次） | 望远镜功能正常；日志不再出现 `TestLookAtSun` 的每帧 `NullReferenceException`；在方山白天举镜看太阳仍能拿到天文成就。机场没有 MapHandler，是 1544 次异常最可能的来源，应命中 `mapHandler-unavailable`。**非方山或夜间举镜时，`mainCamera-` / `center-` / `achievementManager-` 三条必须一次都不命中**（原版在那些条件下会提前 return，1.2.0 已把这三项检查移到复现 guard clause 之后，就是为了消除这种假阳性） |
 | A7 | `ItemOptimizerDeregisterGuard` | 正常游戏，重点在物品密集生成/销毁时 | 日志不再出现 `ItemOptimizationManager.DeregisterItem` 的 `ArgumentNullException`；物品优化行为无变化 |
-| A8 | `StatusEmitterScan` | 沼泽/丛林：走进孢子毒气范围、停在边缘来回、多个毒气区重叠处；Roots 风吹过毒气时（`WindAffectedStatusEmitter`）站在范围内；另外在刚重生/刚进图（ragdoll 尚未注册）时站在毒气里 | 中毒速率与原版一致（同一位置停 10 秒对比中毒条增量，**任何差异都说明等价论证有漏洞**）；进出范围时孢子警告全屏效果照常出现/消失；风吹停毒气时警告也随之消失；重叠区只有最近的那个发出警告；刚重生那一瞬不应出现 `Character.Center` 的 `KeyNotFoundException`（1.2.0 把它从「交回原版再抛一次」改成了真正消除，诊断 `center-unavailable` 可以命中但异常不应出现） |
 
 ### 2.2 等价改写与规模化（14 项，12 组）
 
@@ -89,9 +88,7 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 |---|---|---|---|
 | B1 | `Campfire` + `CampfireProtectionMerge` | 营火范围/休息 | `_charactersInRadius` 内容正确；有人进出/死亡时表现不变；OrbFogHandler 写入一致 |
 | B3 | `HeatEmissionScan` | 取暖 | 范围与速率一致 |
-| B4 | `RagdollPhysicsMats` | 倒地/拖拽/冰面 | 摩擦切换正常，无打滑突变 |
 | B5 | `ItemCollisionMode` | 拾取/丢弃/背包 | 不穿地、碰撞正常 |
-| B6 | `GenericOptimizerRange` | 靠近/远离带优化器物（弓箭发射器 82m、食人花 60m 两个档位各走一次） | 远处脚本/动画启停距离与原版一致。注意范围**不是**代码里的 `+inf`：全库 2133 个实例都被序列化值覆写为 82m 或 60m，所以这是真实可见的门控距离，进出时机必须与原版逐次一致 |
 | B7 | `ZombieScanRange` / `ZombieSpawnScanRange` | 蘑菇僵尸生成/禁用（主机） | 僵尸启停/生成时机与原版一致 |
 | B8 | `SleepingZombieScan` | 蘑菇僵尸睡眠唤醒 | 唤醒距离/角度与原版一致 |
 | B9 | `WeightRefreshCoalescing` | 连续拾取丢弃触发负重刷新 | 负重/荆棘/箭矢数值与特效次数与原版一致 |
@@ -204,7 +201,6 @@ MVID 不是全局门控；目标是证明「结构补丁可继续自验，行为
 | 顺序 | 键 | 建议人数 | 场景 | 专用观察点 |
 |---:|---|---:|---|---|
 | 2 | `Fixes.HeatEmissionScan` | 2/4 | 取暖 | 范围/速率与原版一致 |
-| 3 | `Fixes.RagdollPhysicsMats` | 2/4 | 倒地/拖拽/冰面 | 摩擦切换无突变 |
 | 4 | `Fixes.CampfireProtectionMerge` | 4 | 营火范围 | `_charactersInRadius` 内容正确 |
 | 5 | `Experimental.WeightRefreshCoalescing` | 2/4 | 连续拾取丢弃 | 负重/荆棘/箭矢数值与特效次数与原版一致 |
 | 6 | `Experimental.ExplosionScale` | 4+ | 多人同时投掷炸药 | 降低球数后视觉可接受度、卡顿改善、无负面效果 |
@@ -253,6 +249,21 @@ BepInEx 版本 / 其它模组数量：
 - 插件不提供帧率计数，流畅度请外部工具或主观记录并与无插件基准对比。
 - 单项失败被隔离，报告写明具体项与原因。
 - `DetailBodypartThrottle`、`CollisionCharacterLookup`、`AnimatorValuesHash`、`PlayerNameUiWrites` 尚未在游戏内验证；需按 C6–C8、D3 实测，若目标构建结构不符将各自 fail-closed（`SkippedStructureMismatch`）单独跳过。
+- **1.4.0 的全部改动未经游戏内验证，且这一版跑在一个全新的游戏构建上。** 新增验收点：
+  1. **启动日志是第一道验收** —— 预期 `registered=41, enabled=35, applied=35, skipped=6, failed=0,
+     module-failures=0`。若出现任何 `SkippedStructureMismatch`，把那一行原文记下来：它说明某个补丁读的
+     成员在新版变了形状，是本轮适配漏掉的地方。**再也不应该出现 `SkippedUncertifiedBuild`**（该结果已废弃）。
+  2. **MVID 门已拆除** —— 把 `BuildFingerprint` 的常量改错、或换一个游戏构建，插件应当仍然安装绝大多数
+     补丁并只把兼容模式标成 `structural-validation`；1.3.0 及以前会静默跳过 43 个补丁。
+  3. **A4（`IKItemGuard`）** —— 新版 `ConfigureIK` 的左右手求值顺序颠倒了，所以缺失哪一侧节点的记账也
+     对调了。持各类道具观察双手是否跟随，并记录命中的是 `right-hand-node-missing` 还是
+     `left-hand-node-missing`。
+  4. **C 段 `IsLookedAtScan`** —— 新版把「失明/挣扎」提前 return。请在失明或被抓挣扎时观察玩家名牌是否
+     正确隐藏，且不应出现 `IsLookedAtScan.camera-null`。
+  5. **D1 的兀鹫场景（新增）** —— 被兀鹫抓走飞到 60m 以上时，角色**不应**变软。这是本轮补上的
+     `carrierCondor` 不降级条件。
+  6. **已删除的三个补丁**：`RagdollPhysicsMats`、`GenericOptimizerRange`、`StatusEmitterScan`。它们的
+     配置键会从 cfg 里消失（BepInEx 会保留孤立键但不再生效）。若日志里仍出现这三个名字，说明装的不是 1.4.0。
 - **1.3.0 的全部改动同样未经游戏内验证。** 1.3.0 是一轮纯静态修复（补丁数与开关数不变），新增验收点：
   1. **A4（`IKItemGuard`）升为高优先级** —— 修掉了一个与 A5 同类的写入抑制回归：持有「只缺 `Hand_L`」的
      道具时，原版已完成两次右手写入才抛异常，而旧守卫把它们一起跳过了。请持各类道具观察右手是否跟随，

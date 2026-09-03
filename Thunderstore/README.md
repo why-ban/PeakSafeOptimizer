@@ -2,7 +2,7 @@
 
 A performance mod for PEAK aimed at the case that actually hurts: **a full lobby standing in one place**.
 
-Most of what it does is invisible. 38 of its 44 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. Anything that trades appearance, feel or animation fidelity for frames is **off by default**, because that trade is yours to make, not the mod's.
+Most of what it does is invisible. 35 of its 41 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. Anything that trades appearance, feel or animation fidelity for frames is **off by default**, because that trade is yours to make, not the mod's.
 
 That default-on rule has exactly two declared exceptions, both on by default and both explained below: `Experimental.ExplosionScale` (fewer and, in a pile-up, smaller explosion orbs, and a correspondingly softer camera shake) and `Experimental.TumbleWeedTargetScan` (a tumbleweed re-picks *which* character it chases once every 5 physics ticks, 0.1s, instead of every tick; the force and the steering towards the character it already chose are unchanged, and tumbleweeds only exist in the desert / mesa biome).
 
@@ -68,7 +68,7 @@ Filter `BepInEx/LogOutput.log` for `PeakSafeOptimizer`. You should see:
 
 ```
 PeakSafeOptimizer | compatibility mode: certified
-PeakSafeOptimizer | totals: registered=44, enabled=38, applied=38, skipped=6, failed=0, module-failures=0
+PeakSafeOptimizer | totals: registered=41, enabled=35, applied=35, skipped=6, failed=0, module-failures=0
 ```
 
 `applied` should equal `enabled`. The six skipped lines are the default-off switches. `failed=0` and `module-failures=0` mean no patch hit a problem.

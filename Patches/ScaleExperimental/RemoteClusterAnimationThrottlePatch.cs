@@ -15,8 +15,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// Opt-in: evaluates the animation PlayableGraph of a remote, fully controlled, non-interacting
     /// player character once every N physics ticks instead of every tick.
     ///
-    /// Audited original, CharacterRagdoll.FixedUpdate (CharacterRagdoll.cs:151-174):
-    ///   SetPhysicsMats();
+    /// Audited original, CharacterRagdoll.FixedUpdate (CharacterRagdoll.cs:151-177):
+    ///   if (character.IsLocal) { SetPhysicsMats(); }
     ///   if (firstFrame) { firstFrame = false; return; }
     ///   RotateCharacter();
     ///   refs.ikRigBuilder.SyncLayers();
@@ -41,44 +41,37 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///     the one exception: the accumulator has to be dropped there because the original advances by
     ///     a full fixedDeltaTime of its own, which costs up to (N-1) * fixedDeltaTime of animation time
     ///     per crossing. See <see cref="Yield"/> for why that is accepted rather than fixed.
-    ///   * RotateCharacter/ResetRotation cancel each other out (CharacterRagdoll.cs:193-202): the
+    ///   * RotateCharacter/ResetRotation cancel each other out (CharacterRagdoll.cs:196-205): the
     ///     first sets refs.rigCreator.transform.rotation, the second restores the value captured in
     ///     the same call. They exist so the graph evaluates against a look-rotated root, so on a tick
     ///     with no evaluation they are a no-op pair and are skipped as one unit.
-    ///   * ResetTransform (Bodypart.cs:137-141) writes the bodypart transform back from its
+    ///   * ResetTransform (Bodypart.cs:138-141) writes the bodypart transform back from its
     ///     Rigidbody, undoing what the graph evaluation did to it. Without an evaluation the
     ///     transform was never overwritten, and PhysX keeps driving it directly, so the rendered pose
     ///     still follows physics on every tick - nothing freezes.
-    ///   * SaveAnimationData (Bodypart.cs:126-135) reads the *animated* pose to produce the targets
+    ///   * SaveAnimationData (Bodypart.cs:126-136) reads the *animated* pose to produce the targets
     ///     Animate drives towards. On a skipped tick the transform holds the physics pose, so calling
     ///     it would tell every part "you are already where you should be" and the character would go
     ///     limp. It is therefore deliberately not called; the previous targets stay in place and
     ///     Animate keeps pulling towards them, which is what makes the pose step instead of collapse.
     ///   * SaveAdditionalTransformPositions is skipped for the same reason: it too reads the animated
-    ///     pose (CharacterRagdoll.cs:204-238). Its outputs - data.targetHeadHeight,
+    ///     pose (CharacterRagdoll.cs:207-238). Its outputs - data.targetHeadHeight,
     ///     data.targetHipHeight and the animation helper transforms - therefore keep the value from
     ///     the last evaluation, at most N-1 ticks old, instead of being recomputed from a physics
     ///     pose they were never meant to describe. Recomputing them there would assign the current
-    ///     sagging height to the value Stand() treats as its target (CharacterMovement.cs:690-699),
+    ///     sagging height to the value Stand() treats as its target (CharacterMovement.cs:709-718),
     ///     which drives the standing force to zero and makes the sag self-reinforcing.
-    ///   * SetPhysicsMats runs on every tick, exactly as in the original - and it runs through the
-    ///     same Harmony detour the original call site goes through, so when RagdollPhysicsMats is
-    ///     also enabled this call gets its redundancy filter and advances its 300-frame / 5-second
-    ///     collider-material audit, exactly as CharacterRagdoll.cs:153 does. That is a settled fact,
-    ///     not an assumption: the accessor is built by
-    ///     <see cref="ScaleExperimentalEmit.CreateDelegate{TDelegate}"/>, which is a plain
-    ///     `method.CreateDelegate(typeof(TDelegate))` over the game's own MethodInfo
-    ///     (Patches\ScaleExperimental\ScaleExperimentalEmit.cs:27-33) rather than an emitted
-    ///     DynamicMethod, and MonoMod itself asserts that such an open delegate observes an
-    ///     entry-point detour: the instance constructor of
-    ///     MonoMod.RuntimeDetour.Platforms.DetourRuntimeILPlatform - in the MonoMod.RuntimeDetour.dll
-    ///     shipped in the game's BepInEx\core, decompiled for this note and therefore without a
-    ///     decompiled-latest file.cs:line to cite - native-detours a private instance method, binds
-    ///     the same MethodInfo with Delegate.CreateDelegate, calls it and requires the hook's return
-    ///     value, the undetoured bodies only throwing. That constructor runs on BepInEx's own startup
-    ///     path, so a CreateDelegate that bypassed detours would prevent BepInEx from booting at all.
-    ///     The longer form of the argument, and what it does and does not settle for the distance
-    ///     lane, is in RemoteRagdollLodPhysicsPatch.
+    ///   * SetPhysicsMats is *not* called, on any tick, and that is what keeps this patch equivalent
+    ///     rather than what breaks it. The call is gated on `if (character.IsLocal)`
+    ///     (CharacterRagdoll.cs:153-156; IsLocal is `this == localCharacter`, Character.cs:235), and
+    ///     the eligibility test <see cref="RemoteRagdollLod.ShouldThrottleAnimation"/> rejects the
+    ///     local character outright - `c == local` is the first entry of the shared fallback list
+    ///     (RemoteRagdollLod.cs:717). So every character that reaches the replacement is one for which
+    ///     vanilla performs zero SetPhysicsMats calls per physics step, and a replacement that called
+    ///     it would be *adding* per-step native col.sharedMaterial writes that the game no longer
+    ///     performs. Earlier versions of this patch did call it - once per tick, evaluating or not -
+    ///     because in the previously audited build the call was unconditional; that is now a
+    ///     behavioural deviation and the calls, the accessor and the delegate behind them are gone.
     ///
     /// Nothing here applies a force, moves a Rigidbody, touches collider or kinematic state, or goes
     /// near CharacterSyncer or any RPC. The eligibility test is
@@ -108,9 +101,9 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         ///
         /// 8 is not derived from a player cap, and the inference it looks like it is making does not
         /// hold. PEAK's default lobby size is 4 (Peak.Network.NetworkingUtilities.MAX_PLAYERS is a
-        /// `{ get; set; } = 4`, NetworkingUtilities.cs:18) but SetMaxPlayers clamps to [1, 256] and is
-        /// a [ConsoleCommand] (NetworkingUtilities.cs:32-36, registered in
-        /// Zorro/Core/CLI/ConsoleCommands.cs:81), so a lobby can legitimately be far larger than the
+        /// `{ get; set; } = 4`, NetworkingUtilities.cs:21) but SetMaxPlayers clamps to [1, 256] and is
+        /// a [ConsoleCommand] (NetworkingUtilities.cs:39-43, registered in
+        /// Zorro.Core.CLI/ConsoleCommands.cs:81), so a lobby can legitimately be far larger than the
         /// count. In such a lobby eight *independent* per-character failures no longer imply that the
         /// cause is systemic: a batch of malformed custom models would trip the backstop and switch
         /// the whole lane back to vanilla for everyone, including the well-formed characters.
@@ -142,7 +135,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private static AccessTools.FieldRef<CharacterRagdoll, Character> _character;
         private static AccessTools.FieldRef<CharacterRagdoll, bool> _firstFrame;
         private static AccessTools.FieldRef<CharacterRagdoll, List<Bodypart>> _partList;
-        private static Action<CharacterRagdoll> _setPhysicsMats;
         private static Action<CharacterRagdoll> _rotateCharacter;
         private static Action<CharacterRagdoll> _resetRotation;
         private static Action<CharacterRagdoll> _saveAdditionalTransformPositions;
@@ -176,8 +168,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 typeof(CharacterRagdoll), "firstFrame", typeof(bool));
             FieldInfo partListField = ScaleValidation.RequireInstanceField(
                 typeof(CharacterRagdoll), "partList", typeof(List<Bodypart>));
-            MethodInfo setPhysicsMats = ScaleValidation.RequireInstanceMethod(
+            // Asserted but deliberately *not* bound to a delegate any more: the replacement no longer
+            // calls it, because the original's only call site is gated on character.IsLocal and a
+            // throttled character is never the local one. The assertion stays so that a build which
+            // un-gates the call fails this patch closed instead of silently dropping a per-step
+            // material re-assert that vanilla had started performing again.
+            ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterRagdoll), "SetPhysicsMats", typeof(void), Type.EmptyTypes, false);
+            ScaleValidation.RequireInstanceProperty(typeof(Character), "IsLocal", typeof(bool));
             MethodInfo rotateCharacter = ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterRagdoll), "RotateCharacter", typeof(void), Type.EmptyTypes, false);
             MethodInfo resetRotation = ScaleValidation.RequireInstanceMethod(
@@ -192,8 +190,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 AccessTools.FieldRefAccess<CharacterRagdoll, bool>(firstFrameField);
             AccessTools.FieldRef<CharacterRagdoll, List<Bodypart>> partList =
                 AccessTools.FieldRefAccess<CharacterRagdoll, List<Bodypart>>(partListField);
-            Action<CharacterRagdoll> setMats =
-                ScaleExperimentalEmit.CreateDelegate<Action<CharacterRagdoll>>(setPhysicsMats);
             Action<CharacterRagdoll> rotate =
                 ScaleExperimentalEmit.CreateDelegate<Action<CharacterRagdoll>>(rotateCharacter);
             Action<CharacterRagdoll> reset =
@@ -202,7 +198,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 ScaleExperimentalEmit.CreateDelegate<Action<CharacterRagdoll>>(saveAdditional);
             if (character == null || firstFrame == null || partList == null)
                 throw new InvalidOperationException("RemoteClusterAnimationThrottle FieldRef creation failed");
-            if (setMats == null || rotate == null || reset == null || saveAdditionalPositions == null)
+            if (rotate == null || reset == null || saveAdditionalPositions == null)
                 throw new InvalidOperationException("RemoteClusterAnimationThrottle delegate creation failed");
 
             // Allocated into a local, before Acquire. Two separate reasons:
@@ -225,7 +221,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _character = character;
             _firstFrame = firstFrame;
             _partList = partList;
-            _setPhysicsMats = setMats;
             _rotateCharacter = rotate;
             _resetRotation = reset;
             _saveAdditionalTransformPositions = saveAdditionalPositions;
@@ -242,7 +237,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             _character = null;
             _firstFrame = null;
             _partList = null;
-            _setPhysicsMats = null;
             _rotateCharacter = null;
             _resetRotation = null;
             _saveAdditionalTransformPositions = null;
@@ -266,12 +260,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// all. The low priority keeps the ordering deterministic, it is not what provides the
         /// exclusion.
         ///
-        /// One consequence of that exclusion is documented on the other side, in
-        /// RemoteRagdollLodPhysicsPatch: because that Prefix runs at the default Priority.Normal and
-        /// wins the ordering, a tick it has already suppressed makes this one take the
-        /// `if (!__runOriginal) return false;` exit on its first line, so the per-tick SetPhysicsMats
-        /// further down never happens either. With both switches on, a downgraded character receives no
-        /// SetPhysicsMats call at all.
+        /// With both switches on the two lanes now agree trivially instead of interacting: neither of
+        /// them calls SetPhysicsMats, because the original does not either for any character either
+        /// lane can act on (the call is gated on character.IsLocal, CharacterRagdoll.cs:153-156, and
+        /// both eligibility tests reject the local character). The note that used to live here - about
+        /// this Prefix's per-tick SetPhysicsMats being suppressed by the distance lane's earlier
+        /// verdict - described a call that no longer exists.
         /// </summary>
         [HarmonyPriority(Priority.Low)]
         internal static bool Prefix(CharacterRagdoll __instance, bool __runOriginal)
@@ -347,38 +341,28 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             // stable for the instance's lifetime, allocation free, and safe for int.MinValue.
             int phase = RemoteRagdollLod.Phase(__instance.GetInstanceID(), Interval);
             bool evaluate = (tick + phase) % Interval == 0;
-            bool succeeded;
             if (!evaluate)
             {
-                // Everything the original does unconditionally on a tick without an evaluation.
-                // Guarded for the same reason the evaluation path is: SetPhysicsMats walks partList and
-                // calls Bodypart.SetPhysicsMaterial, which iterates the internal
-                // List<RigCreatorCollider> Bodypart.colliders (Bodypart.cs:41) and writes
-                // collider.col.sharedMaterial in all four branches with no null check on either the
-                // list element or its col field (Bodypart.cs:301-319), so one destroyed collider
-                // throws. Vanilla throws there too, but unguarded *here* the exception left
-                // this character's state half updated - LastTick and PendingDeltaTime were already
-                // written above, and the next tick would see LastTick == tick-1 and therefore never
-                // clear the accumulator, pinning it at its clamp - and HarmonyX would wrap it in a
-                // HarmonyException on the way out of the Prefix. It now takes the same per-instance
-                // latch as any other failure in this patch.
-                succeeded = TrySetPhysicsMats(__instance);
+                // A non-evaluating tick now has literally nothing to do. The original body is
+                // `if (character.IsLocal) SetPhysicsMats();` followed by the firstFrame branch and the
+                // animation work, and every character that reaches this point is remote by construction
+                // - `c == local` is the first entry of RemoteRagdollLod's fallback list, and
+                // Character.IsLocal is the same `this == localCharacter` compare - so the gated call is
+                // not one vanilla would have made. Earlier versions called SetPhysicsMats here to mirror
+                // an unconditional original; doing so now would add per-step native col.sharedMaterial
+                // writes the game no longer performs. Nothing on this path can throw any more, so it
+                // also needs no failure latch.
+                return false;
             }
-            else
-            {
-                float accumulated = state.PendingDeltaTime;
-                state.PendingDeltaTime = 0f;
-                succeeded = RunReplacement(__instance, refs, parts, accumulated);
-            }
-            if (succeeded)
+
+            float accumulated = state.PendingDeltaTime;
+            state.PendingDeltaTime = 0f;
+            if (RunReplacement(__instance, refs, parts, accumulated))
                 return false;
 
             // The replacement failed. It has already restored the rig rotation it changed, so this
             // tick stays skipped - handing it to the original as well would run RotateCharacter a
-            // second time on the same tick. The non-evaluating path skips the tick for the same
-            // reason the original would have abandoned it: SetPhysicsMats is the first thing
-            // CharacterRagdoll.FixedUpdate does (CharacterRagdoll.cs:153), so if it throws nothing
-            // after it runs there either. Every later tick for *this* character goes back to the
+            // second time on the same tick. Every later tick for *this* character goes back to the
             // original; other characters are unaffected unless the failure count shows the cause is
             // systemic.
             state.DisabledAfterFailure = true;
@@ -392,27 +376,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.lane-disabled");
             }
             return false;
-        }
-
-        /// <summary>
-        /// The one call the original makes on every tick, evaluation or not. Returns false if it threw,
-        /// which routes this character into the same per-instance latch as a failed replacement. It
-        /// writes no rotation and no force, so unlike <see cref="RunReplacement"/> there is nothing to
-        /// restore on the way out - the tick simply did not happen.
-        /// </summary>
-        private static bool TrySetPhysicsMats(CharacterRagdoll instance)
-        {
-            try
-            {
-                _setPhysicsMats(instance);
-                return true;
-            }
-            catch (Exception)
-            {
-                // Once per character at most: the caller latches this instance out immediately after.
-                RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.set-physics-mats-failed");
-                return false;
-            }
         }
 
         /// <summary>
@@ -432,7 +395,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// Considered and rejected: evaluating once with the accumulated delta time here, before
         /// handing the tick over. That would put two evaluations on the same tick - the replacement's
         /// and the original's - which means two RotateCharacter calls, and the second would capture the
-        /// already look-rotated rig root as its rotationBefore (CharacterRagdoll.cs:193-197) and leave
+        /// already look-rotated rig root as its rotationBefore (CharacterRagdoll.cs:196-200) and leave
         /// the root permanently skewed. Also rejected: carrying the remainder into the next tick, which
         /// would double-count it because the original always advances by a full fixedDeltaTime of its
         /// own regardless of what happened before. Neither is worth a permanently skewed rig or a
@@ -455,58 +418,63 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         }
 
         /// <summary>
-        /// The audited body of CharacterRagdoll.FixedUpdate - SetPhysicsMats at CharacterRagdoll.cs:153
-        /// followed by :159-173 - in the same order and with the same calls, but it is not a literal
-        /// transcription, and the earlier claim that it "mirrors the audited body" was too strong. The
-        /// complete list of deviations, each with its direction:
+        /// The audited body of CharacterRagdoll.FixedUpdate - :162-176, i.e. everything after the
+        /// IsLocal-gated SetPhysicsMats at :153-156 and the firstFrame branch at :157-161 - in the same
+        /// order and with the same calls, but it is not a literal transcription. The complete list of
+        /// deviations, each with its direction:
         ///   1. Delta time. Both evaluations are handed the accumulated <paramref name="deltaTime"/>
         ///      instead of Time.fixedDeltaTime (the original passes the latter at
-        ///      CharacterRagdoll.cs:161-162). That is the entire point of the patch: the graph is in
+        ///      CharacterRagdoll.cs:164-165). That is the entire point of the patch: the graph is in
         ///      DirectorUpdateMode.Manual, so the animation clock has to be paid the ticks that were
         ///      skipped. Direction: preserves total animation time, lowers its resolution.
-        ///   2. `if (rigRoot == null) return false;` before anything runs. The original reaches
-        ///      refs.rigCreator.transform inside RotateCharacter (CharacterRagdoll.cs:195) and would
-        ///      throw there, but only *after* having run SetPhysicsMats at :153. So on that one tick
-        ///      the replacement also skips the material re-assert that vanilla would have completed
-        ///      before throwing; from the next tick on the caller's latch has handed this character
-        ///      back to the untouched original, which re-asserts it every tick again. One skipped
-        ///      collider-material write on a rig that has no transform to rotate. The check is
-        ///      mandatory here regardless: the rollback path below needs a transform to write the
-        ///      rotation back to.
-        ///   3. `if (rigBuilder != null)` around the SyncLayers/Evaluate pair. The original
-        ///      dereferences character.refs.ikRigBuilder bare (CharacterRagdoll.cs:160-161).
+        ///   2. SetPhysicsMats is not called. In the audited build it opened the method
+        ///      unconditionally, so the replacement had to call it; it is now gated on
+        ///      character.IsLocal (CharacterRagdoll.cs:153-156) and every character that reaches this
+        ///      replacement is remote (`c == local` is the first fallback, RemoteRagdollLod.cs:717).
+        ///      Calling it would therefore add native col.sharedMaterial writes vanilla does not
+        ///      perform. Direction: exact match with the new original, and it removes the only call in
+        ///      this method that could throw for a reason outside the animation path.
+        ///   3. `if (rigRoot == null) return false;` before anything runs. The original reaches
+        ///      refs.rigCreator.transform inside RotateCharacter (CharacterRagdoll.cs:198) and would
+        ///      throw there. Since deviation 2 there is nothing before that point in the original body
+        ///      for a remote character, so the early return is now exactly "the tick did not happen",
+        ///      with nothing skipped that vanilla would have completed first. The check is mandatory
+        ///      here regardless: the rollback path below needs a transform to write the rotation back
+        ///      to.
+        ///   4. `if (rigBuilder != null)` around the SyncLayers/Evaluate pair. The original
+        ///      dereferences character.refs.ikRigBuilder bare (CharacterRagdoll.cs:163-164).
         ///      Direction: more tolerant. Reported - see below.
-        ///   4. `if (graph.IsValid())` around the animator graph evaluation. The original calls
-        ///      playableGraph.Evaluate bare (CharacterRagdoll.cs:162) and the native binding is
+        ///   5. `if (graph.IsValid())` around the animator graph evaluation. The original calls
+        ///      playableGraph.Evaluate bare (CharacterRagdoll.cs:165) and the native binding is
         ///      declared ThrowsException (UnityEngine/Playables/PlayableGraph.cs:137-139), so an
         ///      invalid graph raises there rather than being ignored. Direction: more tolerant.
         ///      Reported - see below.
-        ///   5. try/catch around the whole body plus a finally that runs ResetRotation and the
+        ///   6. try/catch around the whole body plus a finally that runs ResetRotation and the
         ///      ResetTransform loop even when the body threw. The original has no handler, so a throw
-        ///      anywhere between :159 and :168 leaves the rig root look-rotated and skips every
+        ///      anywhere between :162 and :171 leaves the rig root look-rotated and skips every
         ///      ResetTransform for that tick. Direction: strictly better than vanilla, and it is what
         ///      makes "failure does not hand the tick back" safe (see the last paragraph).
-        ///   6. The firstFrame branch (CharacterRagdoll.cs:154-158) is not here; the Prefix yields to
+        ///   7. The firstFrame branch (CharacterRagdoll.cs:157-161) is not here; the Prefix yields to
         ///      the original on that tick instead, so the original owns both the check and the flag.
         ///      Direction: identical behaviour, different location.
-        ///   7. refs and parts are resolved once by the Prefix and passed in, where the original
-        ///      re-reads character.refs.* and partList on every line (CharacterRagdoll.cs:160-173).
+        ///   8. refs and parts are resolved once by the Prefix and passed in, where the original
+        ///      re-reads character.refs.* and partList on every line (CharacterRagdoll.cs:162-176).
         ///      Equivalent: nothing in the body reassigns Character.refs or CharacterRagdoll.partList,
         ///      and the Prefix has already null-checked both. Likewise the local rotationBefore is
-        ///      only the fallback for deviation 5 - the normal path still restores through the game's
+        ///      only the fallback for deviation 6 - the normal path still restores through the game's
         ///      own ResetRotation, which reads the game's own rotationBefore field
-        ///      (CharacterRagdoll.cs:199-202) exactly as vanilla does.
-        /// Nothing else differs: SetPhysicsMats, RotateCharacter, SyncLayers, Evaluate, the graph
-        /// evaluation, ConfigureIK, the SaveAnimationData loop, SaveAdditionalTransformPositions,
-        /// ResetRotation and the ResetTransform loop all run, once each, in the audited order.
+        ///      (CharacterRagdoll.cs:202-205) exactly as vanilla does.
+        /// Nothing else differs: RotateCharacter, SyncLayers, Evaluate, the graph evaluation,
+        /// ConfigureIK, the SaveAnimationData loop, SaveAdditionalTransformPositions, ResetRotation and
+        /// the ResetTransform loop all run, once each, in the audited order.
         ///
-        /// On deviations 3 and 4 specifically. A null ikRigBuilder is not hypothetical: Character.Awake
+        /// On deviations 4 and 5 specifically. A null ikRigBuilder is not hypothetical: Character.Awake
         /// assigns it with refs.rigCreator.GetComponent&lt;RigBuilder&gt;() and then guards its own
-        /// follow-up work with `if ((bool)refs.ikRigBuilder)` (Character.cs:381-392), so the game
+        /// follow-up work with `if ((bool)refs.ikRigBuilder)` (Character.cs:377-388), so the game
         /// itself treats the component as optional - it is CharacterRagdoll.FixedUpdate that does not.
         /// On such a rig - a custom model with no RigBuilder, say - the original raises once per
-        /// physics step, and because that throw happens at :160, after RotateCharacter at :159 and
-        /// before ResetRotation at :169, vanilla also leaves the rig root look-rotated and skips every
+        /// physics step, and because that throw happens at :163, after RotateCharacter at :162 and
+        /// before ResetRotation at :172, vanilla also leaves the rig root look-rotated and skips every
         /// ResetTransform for that tick. The replacement skips just the IK sync (or just the graph
         /// evaluation), completes the rest of the body, reports `completed`, and keeps the character
         /// throttled.
@@ -529,27 +497,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         /// aggregate line per reason per 30s. Neither branch is reachable on a healthy rig, so on a
         /// healthy game the two reasons never appear at all.
         ///
-        /// Deliberately *not* symmetrical with how _setPhysicsMats is handled in this same class,
-        /// where the real call is kept and only its exception is collected into the failure latch
-        /// (TrySetPhysicsMats, and the try in this method). The two situations are not the same
-        /// shape:
-        ///   * SetPhysicsMats offers nothing to test. Its inputs (partList, each part's collider
-        ///     list) are private to the game, so "guard it" is not available - only "call it and
-        ///     catch" is. refs.ikRigBuilder and PlayableGraph.IsValid() are both directly testable.
-        ///   * A caught SetPhysicsMats failure still ends up exposed exactly as in vanilla: the catch
-        ///     latches this instance out, so from the next tick on the untouched original runs and
-        ///     throws again every tick. A guarded rigBuilder is never exposed that way, because the
-        ///     replacement succeeds - which is what the two diagnostics above compensate for.
-        ///   * SetPhysicsMats is also the first statement of the original body
-        ///     (CharacterRagdoll.cs:153), so when it throws in vanilla nothing after it runs either
-        ///     and skipping the rest of the tick matches what the original would have done. The
-        ///     guarded calls sit mid-body, so skipping just them leaves the remaining audited work
-        ///     (ConfigureIK, the SaveAnimationData loop, SaveAdditionalTransformPositions,
-        ///     ResetRotation, ResetTransform) running - which is the point.
+        /// The asymmetry this note used to describe - guard the two testable calls, but keep the
+        /// untestable SetPhysicsMats call and merely catch its exception - is gone with deviation 2:
+        /// there is no untestable call left in this method, and the whole
+        /// "RemoteClusterAnimationThrottle.set-physics-mats-failed" path went with it.
         ///
         /// Returns false if anything threw. The caller must not hand the same tick to the original in
         /// that case: RotateCharacter captures rotationBefore and then look-rotates the rig root
-        /// (CharacterRagdoll.cs:193-197), so a second RotateCharacter in the same tick would capture
+        /// (CharacterRagdoll.cs:196-200), so a second RotateCharacter in the same tick would capture
         /// the already-rotated value and leave the rig root permanently look-rotated.
         ///
         /// The rotation is therefore restored here, and restored twice over: through the game's own
@@ -574,19 +529,17 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             bool completed = false;
             try
             {
-                _setPhysicsMats(instance);
                 _rotateCharacter(instance);
                 rotated = true;
                 RigBuilder rigBuilder = refs.ikRigBuilder;
-                // Not in the original: CharacterRagdoll.cs:160-161 dereferences
+                // Not in the original: CharacterRagdoll.cs:163-164 dereferences
                 // character.refs.ikRigBuilder bare, so a rig with no RigBuilder throws an NRE there on
                 // every physics step. Here the IK sync is skipped instead and this tick is still
                 // reported as completed, so such a character stays throttled. The else branch is what
-                // keeps that from being silent - see the method docstring for the trade, and for why
-                // _setPhysicsMats above is deliberately handled the other way round.
+                // keeps that from being silent - see the method docstring for the trade.
                 if (rigBuilder != null)
                 {
-                    // Both calls, exactly as the audited body has them (CharacterRagdoll.cs:160-161),
+                    // Both calls, exactly as the audited body has them (CharacterRagdoll.cs:163-164),
                     // and both must stay. RigBuilder.Evaluate does call SyncLayers itself, but only
                     // inside `if (graph.IsValid())` (the guard is RigBuilder.cs:92, inside Evaluate at
                     // :90-97), and that property has exactly one assignment: the parameterless Build()
@@ -618,7 +571,7 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     RateLimitedDiagnostics.Hit("RemoteClusterAnimationThrottle.rig-builder-unavailable");
                 }
                 PlayableGraph graph = refs.animator.playableGraph;
-                // Also not in the original: CharacterRagdoll.cs:162 calls Evaluate unguarded, and the
+                // Also not in the original: CharacterRagdoll.cs:165 calls Evaluate unguarded, and the
                 // native binding is declared ThrowsException
                 // (UnityEngine/Playables/PlayableGraph.cs:137-139), so an invalid graph raises there
                 // every tick. Same trade, and same reporting, as the rigBuilder guard above.
