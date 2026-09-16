@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.4.1
+
+The game shipped another update (Assembly-CSharp MVID `c88cc526-…` -> `e053d265-…`). Only
+`Assembly-CSharp.dll` changed - every other game assembly is byte-identical - and no method this mod
+patches was rewritten. So this release contains no adaptation work. What it contains is three
+long-standing accounting errors, one of which was a real regression.
+
+### `IKItemGuard` reproduced the wrong hand (real regression, fixed)
+
+This patch exists because `CharacterAnimations.ConfigureIK` raises a `NullReferenceException` every
+physics frame while you hold an item whose prefab lacks a `Hand_L` or `Hand_R` child. The two cases
+are not symmetric: whichever hand the method evaluates *first* throws with no writes landed, and the
+other hand has already been written twice by the time it throws, so the patch has to reproduce those
+writes before skipping. Getting that assignment wrong freezes one IK hand target or performs writes
+vanilla never reaches.
+
+It was wrong. The patch was written against the 1.20 body, which evaluated the right hand first;
+from `c88cc526` onward the game evaluates the **left** hand first. The bookkeeping was never flipped
+with it, so for two releases a missing `Hand_L` froze the left IK target and a missing `Hand_R`
+performed two right-hand writes the original does not reach. Verified at the IL level
+(`GetItemPosLeft` at IL_0063, the rotation setter at IL_009f, `SetPositionAndRotation` at IL_00a5,
+then `GetItemPosRight` at IL_00da) and fixed: the patch now reproduces the left-hand pair and treats
+a missing `Hand_L` as the zero-write case. The two repair reasons swapped names to match.
+
+### Two patches removed
+
+- **`PocketBehaviorGuard`.** It claimed vanilla dereferenced `character.player.itemSlots` unguarded.
+  The game added `character?.player == null` plus an `itemSlots` null/length check in `c88cc526` -
+  the release this was last audited against - so the guard has been redundant since 1.4.0. Because
+  its prefix returned true and let the original run, it was pure per-character per-frame overhead.
+  This is the same class of mistake as the three patches 1.4.0 removed; this one was missed.
+- **`AnimatorValuesHash`.** A census of every asset file in the shipped game (all `.assets`, every
+  `level*`, every `sharedassets*`, `globalgamemanagers`, 810 MonoBehaviour classes with instances)
+  finds **zero** `AnimatorValues` instances - against 23 `UIPlayerNames`, 1 `Snowball` and 3
+  `ExplosionEffect`, all of which the same sweep resolves. Nothing in the game or in any installed
+  mod adds the component in code either. Its target method can never run, which makes it the same
+  situation as the `ParticleCountCullerWrite` patch deleted in 1.2.0.
+
+Counts: **39 patches / 35 switches, 33 on by default**, down from 41 / 37 / 35.
+
+### Three comments whose conclusions had gone stale
+
+No behaviour change, but they were load-bearing arguments and are now correct:
+
+- `ExplosionScale` justified leaving nine prefab fields unasserted partly on the grounds that
+  `requireCurrentMvid` would skip the whole patch on an unrecognised build. 1.4.0 deliberately
+  removed that gate, so the backstop it leaned on no longer exists. The comment now says plainly
+  that those nine fields are protected only by re-auditing a fresh decompile after a game update.
+- `SleepingZombieScan` called its squared-distance replacement "provably equivalent". It is not
+  bit-exact: `t*t` rounds once in float and the comparison moves onto a different quantum, leaving a
+  band at most one ULP wide where the two disagree (roughly half of plausible thresholds have such a
+  band, and the patch errs slightly permissive). The probability of a real zombie landing in it is
+  around 1e-10 per test, so the behaviour is fine, but the comment now says "within one ULP" instead
+  of "identical".
+- `RemoteRagdollLodAnimator` described a vanilla `Debug.LogWarning` about swapped animator
+  controllers. The current build deleted that log line and kept the check, so the comment now
+  describes the check without the log.
+
+### Documentation
+
+`README.md` and `TESTING.md` are gone. Their per-patch tables and test checklists duplicated what the
+patch docstrings already state, and every code change needed them rewritten, which is a worse use of
+attention than the code itself. The source docstrings are the specification. This changelog and the
+Thunderstore README cover only what a user needs.
+
 ## 1.4.0
 
 The game shipped a low-level update: it now does a batch of its own performance work, plus a console

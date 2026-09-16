@@ -2,7 +2,7 @@
 
 A performance mod for PEAK aimed at the case that actually hurts: **a full lobby standing in one place**.
 
-Most of what it does is invisible. 35 of its 41 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. Anything that trades appearance, feel or animation fidelity for frames is **off by default**, because that trade is yours to make, not the mod's.
+Most of what it does is invisible. 33 of its 39 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. Anything that trades appearance, feel or animation fidelity for frames is **off by default**, because that trade is yours to make, not the mod's.
 
 That default-on rule has exactly two declared exceptions, both on by default and both explained below: `Experimental.ExplosionScale` (fewer and, in a pile-up, smaller explosion orbs, and a correspondingly softer camera shake) and `Experimental.TumbleWeedTargetScan` (a tumbleweed re-picks *which* character it chases once every 5 physics ticks, 0.1s, instead of every tick; the force and the steering towards the character it already chose are unchanged, and tumbleweeds only exist in the desert / mesa biome).
 
@@ -18,7 +18,7 @@ Works in multiplayer with vanilla players and with players who do not have the m
 
 ## What it actually does
 
-**Removes per-frame exception floods.** PEAK throws a few `NullReferenceException`s every single frame in situations that are easy to hit (rope climbing with an empty segment list, an incomplete local character while the emote wheel is up, hand IK during an item swap, pocket items during the join window, two unguarded singletons while binoculars are raised). An exception per frame is not free. Eight guards cut those to zero - each one skips exactly the frame whose data is missing and defers to the untouched original otherwise, and each one mirrors the short circuits in the original so it never skips a frame vanilla would have survived. Those eight are counted by what they repair, not by where they live in the source: they are eight independent switches, and one of them - the pocket-item guard - sits outside the mod's stability folder, so counting files in one directory will not reproduce the number. Measured in one session: 2315 + 1544 + 184 + 135 + 67 exceptions. Those counts predate the current guards and the emote-wheel figure in particular has not been re-measured against them, so treat them as the order of magnitude rather than the exact win. The binocular one alone was 1544 - one per frame for as long as anyone held the binoculars up, each costing a throw, a stack capture and a synchronous log write on the main thread.
+**Removes per-frame exception floods.** PEAK throws a few `NullReferenceException`s every single frame in situations that are easy to hit (rope climbing with an empty segment list, an incomplete local character while the emote wheel is up, hand IK during an item swap, pocket items during the join window, two unguarded singletons while binoculars are raised). An exception per frame is not free. Seven guards cut those to zero - each one skips exactly the frame whose data is missing and defers to the untouched original otherwise, and each one mirrors the short circuits in the original so it never skips a frame vanilla would have survived. Those seven are independent switches, all in the stability lane. Measured in one session: 2315 + 1544 + 184 + 135 + 67 exceptions. Those counts predate the current guards and the emote-wheel figure in particular has not been re-measured against them, so treat them as the order of magnitude rather than the exact win. The binocular one alone was 1544 - one per frame for as long as anyone held the binoculars up, each costing a throw, a stack capture and a synchronous log write on the main thread.
 
 **Cuts redundant native calls.** A large part of the per-frame cost in a multiplayer lobby is the game writing values that are already what it is about to write, or recomputing something it computed a moment ago. Examples: `Bodypart.Drag` multiplies two velocity vectors by exactly `1f` for every bodypart of every ragdolled character, 50 times a second; `Bodypart.AddMovementForce` adds the zero vector for everyone who is not pressing a movement key; the `LightVolume` lightmap is sampled per character per frame for voice occlusion when clustered players share the same voxel. These are skipped only when the skip is provably an identity.
 
@@ -58,7 +58,7 @@ Every switch hot-reloads: change it in a config manager and it installs or unins
 
 Each patch validates the game build itself before installing: declaring type, member type, exact signature, and for the enum-driven ones the member order. If anything does not match, that patch reports `SkippedStructureMismatch` and stays uninstalled. The others are unaffected.
 
-Patches that replace audited behaviour additionally require the game assembly to match the audited build. **After a PEAK update, those skip themselves safely rather than running against code they were not reasoned about.** The startup log names each one. Nothing is ever installed on a "probably fine" basis.
+Every patch is attempted on every build and each one decides for itself: it installs only if the exact member shapes it reads all match, and reports `SkippedStructureMismatch` otherwise. There is deliberately **no build-level gate** - an earlier version skipped almost the whole mod on any game update before a single patch got to check whether the members it actually reads had changed, which is backwards. What a shape check cannot see is a method body that kept its shape but changed meaning; the startup log therefore reports the game assembly's MVID so you can tell whether anyone has re-read that build. Patches classified `Fingerprint` or `StrictIl` in the log are the ones worth re-reading after an update. Nothing is ever installed on a "probably fine" basis.
 
 A failure at any stage - factory, initialization, target resolution, Harmony patching - is isolated to that one patch and logged, or to that one switch when the switch covers several patches that are only correct together. Uninstall is per method and verified against Harmony's own patch info; `UnpatchSelf` is never called, so other mods' patches on the same methods are never disturbed.
 
@@ -68,12 +68,12 @@ Filter `BepInEx/LogOutput.log` for `PeakSafeOptimizer`. You should see:
 
 ```
 PeakSafeOptimizer | compatibility mode: certified
-PeakSafeOptimizer | totals: registered=41, enabled=35, applied=35, skipped=6, failed=0, module-failures=0
+PeakSafeOptimizer | totals: registered=39, enabled=33, applied=33, skipped=6, failed=0, module-failures=0
 ```
 
 `applied` should equal `enabled`. The six skipped lines are the default-off switches. `failed=0` and `module-failures=0` mean no patch hit a problem.
 
-`compatibility mode: structural-validation` instead of `certified` means the game has been updated: structural guards still validate independently and run, behaviour-replacement patches skip themselves.
+`compatibility mode: structural-validation` instead of `certified` just means the running game build is not the one this release was last audited against. Every patch still validates and installs on its own merits; the label tells you to start re-reading from the `Fingerprint` and `StrictIl` entries.
 
 ## If something goes wrong
 

@@ -13,10 +13,18 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     /// MushroomZombie.cs:506-526), reached every frame from MushroomZombie.Update while the zombie
     /// is in the Sleeping state.
     ///
-    /// Two changes, both provably equivalent:
-    /// 1. Squared distance for the `num &lt; distanceBeforeWakeup` test. Strict `&lt;` with a
-    ///    non-negative distance and a positive threshold is exactly d*d &lt; t*t. A non-positive
-    ///    threshold falls back to the original method, because there the original can never pass.
+    /// Two changes, both equivalent to well under one ULP of the original's judgement:
+    /// 1. Squared distance for the `num &lt; distanceBeforeWakeup` test. It is NOT bit-exact: the
+    ///    original compares `Vector3.Distance(a, b) &lt; t`, i.e. `(float)Math.Sqrt(d) &lt; t`, while
+    ///    this compares `d &lt; t*t`. `t*t` rounds once in float, and a square root moves the
+    ///    comparison onto a different quantum, so for thresholds where `t*t` is not exactly
+    ///    representable there is a band at most one ULP wide in `d` where the two disagree. Over the
+    ///    plausible threshold values (1, 2, 3, 5, 8, 10, 20, 30, 50, 100, 300, 0.5, 0.7, 1.5)
+    ///    roughly half have such a band, and when it exists the patch is slightly more permissive.
+    ///    The probability of a real zombie landing in it is on the order of 1e-10 per test - far
+    ///    below any observable effect - but the claim is "equivalent to within one ULP", not
+    ///    "provably identical". A non-positive threshold falls back to the original method, because
+    ///    there the original can never pass.
     /// 2. Vector3.Angle is computed only after the distance test passes. In the original the angle
     ///    is computed for every valid target before the compound condition is evaluated, but
     ///    Vector3.Angle is a pure function with no side effects and the `&amp;&amp;` chain already

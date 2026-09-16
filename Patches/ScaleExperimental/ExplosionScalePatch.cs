@@ -353,20 +353,29 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             //      protect the argument it was added to protect. The same holds for the 12.19m orb
             //      diameter (a prefab hierarchy fact, see OrbRadiusPerBaseScale) and for the 3/2 and
             //      3/0 counts.
-            //   2. This patch is registered with requireCurrentMvid: true, so PatchDefinition infers
-            //      CompatibilityLevel.Fingerprint and RequiresCertifiedBuild for it, and
-            //      PatchInstaller skips the patch outright - before Initialize even runs - when the
-            //      Assembly-CSharp MVID is not the audited one. Any re-authoring of ExplosionEffect,
-            //      including one that only changed a field's type, changes that MVID. So on the only
-            //      build where Initialize runs at all, every one of those nine fields is already
-            //      guaranteed to have its audited shape.
+            //   2. That revision leaned on a backstop that no longer exists. It claimed that because
+            //      this patch is registered with requireCurrentMvid: true, PatchInstaller would skip
+            //      the patch outright - before Initialize even runs - whenever the Assembly-CSharp MVID
+            //      was not the audited one, so on the only build where Initialize ran, all nine fields
+            //      were already guaranteed to have their audited shape. 1.4.0 removed that gate on
+            //      purpose (see the comment in PatchInstaller.InstallOne): MVID mismatch no longer
+            //      skips anything, and this patch now installs on any build whose shapes it happens to
+            //      match. Nothing here checks those nine fields, and it should not pretend otherwise.
+            //
+            // The consequence, stated plainly rather than papered over: the correctness of this patch
+            // rests on facts no assertion in this file can reach - the three prefab serialized values,
+            // the orb hierarchy and its particle systems' scalingMode, and the assumption that
+            // lowering the two counts and baseScale stays purely visual. It stays safe only as long as
+            // somebody re-reads the freshly decompiled ExplosionEffect, the three prefabs and the AOE
+            // sibling after a game update. That is a re-audit obligation, not a structural one, and it
+            // is the reason this patch is classified Fingerprint.
             //
             // What is left asserted is exactly what the Prefix reads or writes, plus Character.Center
             // (see TryGetViewpoint for why that one is a stand-in assertion rather than a dead one).
-            // Those are the assertions that would still carry weight if the fingerprint requirement
-            // were ever relaxed to Structural; assertions on fields the patch never touches would not,
-            // because a changed shape on an untouched field cannot make this patch behave wrongly - it
-            // could only make it refuse to install.
+            // Those are the assertions that actually carry weight: a changed shape on a member the
+            // patch reads or writes changes what the patch does, whereas a changed shape on one of
+            // those nine untouched fields could only make this patch refuse to install - which is why
+            // asserting them would add fail-closed surface without protecting an argument.
 
             // Distance tier: primary viewpoint, then the local character fallback.
             ScaleValidation.RequireStaticField(typeof(MainCamera), "instance", typeof(MainCamera));

@@ -16,7 +16,7 @@ namespace PeakSafeOptimizer.Infrastructure
         /// the log shows structural-validation instead of certified, the Fingerprint and StrictIl
         /// patches are the ones worth re-reading.
         /// </summary>
-        public static readonly Guid CurrentAssemblyCSharpMvid = new Guid("c88cc526-8d4e-40fa-afdb-e24e4c233bd0");
+        public static readonly Guid CurrentAssemblyCSharpMvid = new Guid("e053d265-53c9-4bf5-8371-e5b8bc561f6e");
 
         private BuildFingerprint(Guid actualMvid, string sha256)
         {

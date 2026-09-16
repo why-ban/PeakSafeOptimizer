@@ -104,13 +104,7 @@ namespace PeakSafeOptimizer.Config
         // floating, drifting or accumulating force.
         DetailBodypartThrottle,
         CollisionCharacterLookup,
-        AnimatorValuesHash,
         PlayerNameUiWrites,
-        // Stability-style guard in the Scale lane: protects CharacterItems.UpdatePocketBehaviors()
-        // during the join window, where Character.player (a PlayerHandler lookup, Character.cs:201)
-        // is not linked yet and the original dereferences character.player.itemSlots every frame.
-        // Confirmed in-game: 14 NullReferenceException around the player registration log lines.
-        PocketBehaviorGuard,
         // Scale lane: skips Bodypart.Drag when the effective drag is exactly 1f, which makes both
         // velocity multiplications IEEE identities. Concentrated on ragdolled characters, because
         // currentRagdollControll == 0 gives Mathf.Lerp(1f, drag, 0f) == 1f.
@@ -279,9 +273,7 @@ namespace PeakSafeOptimizer.Config
                 [PatchId.DetailBodypartThrottle] =
                     BindExperimental(config, PatchId.DetailBodypartThrottle, false),
                 [PatchId.CollisionCharacterLookup] = BindPatch(config, PatchId.CollisionCharacterLookup, true),
-                [PatchId.AnimatorValuesHash] = BindPatch(config, PatchId.AnimatorValuesHash, true),
                 [PatchId.PlayerNameUiWrites] = BindPatch(config, PatchId.PlayerNameUiWrites, true),
-                [PatchId.PocketBehaviorGuard] = BindPatch(config, PatchId.PocketBehaviorGuard, true),
                 [PatchId.BodypartDragIdentity] = BindPatch(config, PatchId.BodypartDragIdentity, true),
                 [PatchId.LightVolumeSampleCache] =
                     BindPatch(config, PatchId.LightVolumeSampleCache, true),

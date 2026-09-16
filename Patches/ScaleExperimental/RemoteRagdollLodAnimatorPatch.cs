@@ -51,11 +51,13 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
     ///     consumer outside that same block (CharacterAnimations.cs:164), so leaving it stale is not
     ///     observable either.
     ///   * The runtimeAnimatorController change detection plus CacheAnimatorHashes()
-    ///     (CharacterAnimations.cs:169-173). While downgraded, a controller swapped in without
-    ///     SetAnimatorController is not noticed, so _animatorHashes can go stale and the vanilla
-    ///     warning is not logged. This is self-healing - the check resumes as soon as the character
+    ///     (CharacterAnimations.cs:169-172). While downgraded, a controller swapped in without
+    ///     SetAnimatorController is not noticed, so _animatorHashes can go stale. (The 1.20-through-
+    ///     c88cc526 builds also logged a "Somebody changed animator controllers" warning from that
+    ///     block; the current build dropped the log line and kept the check, so there is no longer a
+    ///     log to miss.) This is self-healing - the check resumes as soon as the character
     ///     comes back inside the exit distance - and harmless in the meantime, because the only
-    ///     consumer of _animatorHashes is the AN_VINE_SLIDE guard at CharacterAnimations.cs:235,
+    ///     consumer of _animatorHashes is the AN_VINE_SLIDE guard at CharacterAnimations.cs:234,
     ///     which lives inside the very run of parameter writes the reduced body drops.
     ///
     /// One frozen parameter deserves naming separately. The replacement consumes and discards
