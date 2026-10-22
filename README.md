@@ -5,14 +5,14 @@ lobby standing in one place. 37 Harmony patches, all on by default, each one eit
 equivalence-proven rewrite of a hot vanilla method or a guard for a vanilla fault that throws an
 exception every frame.
 
-- Thunderstore: [original page](https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/) · [new page](https://thunderstore.io/c/peak/p/khalil2/)
+- Thunderstore: [current page](https://thunderstore.io/c/peak/p/khalil2/) · [old page, frozen at 1.4.1](https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/)
 - Release line: 1.5.0, audited against PEAK 2.6.b
 - License: MIT
 
-> **Account migration.** The Thunderstore account that owns the original page is linked to a GitHub
-> account that has been banned. If that ban is not lifted, all future releases will be published under
-> [khalil2](https://thunderstore.io/c/peak/p/khalil2/) instead. This repository is the source of truth
-> either way.
+> **This mod has moved to a new Thunderstore account.** The account that owns the old page is bound to a
+> GitHub account that has been banned, and Thunderstore sign-in goes through GitHub, so that account can
+> no longer be logged into and the old page can no longer be updated. Publishing continues under
+> [khalil2](https://thunderstore.io/c/peak/p/khalil2/), which is where this release lives.
 
 ## How it works
 

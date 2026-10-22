@@ -100,8 +100,9 @@ New icon: the old one was a generated gradient image that did not look like it b
 The new one is a flat badge - a mustard ridge under a paper snow cap, an orange bolt in the sky - drawn
 in the game's own palette, with both the English and the Chinese name on it.
 
-The Thunderstore README now carries the account-migration notice: the account that owns the original
-page is bound to a banned GitHub account, and if the ban is not lifted, releases move to `khalil2`.
+The Thunderstore README now carries the account notice: the account that owns the old page is bound to a
+banned GitHub account, Thunderstore sign-in goes through GitHub, so that account can no longer be logged
+into and the old page is frozen at 1.4.1. Releases from this one on are published as `khalil2`.
 
 ## 1.4.1
 

@@ -6,15 +6,16 @@ Most of what it does is invisible. Most of its 37 patches are *equivalence-prove
 
 There are no numbers to tune. Every threshold is a constant in the code, next to the reasoning that picked it.
 
-> **Account migration.** The Thunderstore account that owns this page is linked to a GitHub account
-> that has been banned. If that ban is not lifted, every future update will be published under
-> [khalil2](https://thunderstore.io/c/peak/p/khalil2/) instead of here. Follow that page to keep
-> receiving updates - this one would stay frozen at its last release.
+> **This mod has moved to a new Thunderstore account.** The account that owns the old page is bound to a
+> GitHub account that has been banned, and Thunderstore sign-in goes through GitHub, so that account can
+> no longer be logged into and the old page can no longer be updated. It stays frozen at 1.4.1.
+> Publishing continues under [khalil2](https://thunderstore.io/c/peak/p/khalil2/) - this release and
+> every one after it. If you installed from the old page, switch to the new one to keep getting updates.
 
 ## Links
 
-- Thunderstore, original page: <https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/>
-- Thunderstore, new page if the ban is not lifted: <https://thunderstore.io/c/peak/p/khalil2/>
+- Thunderstore, current page: <https://thunderstore.io/c/peak/p/khalil2/>
+- Thunderstore, old page (frozen at 1.4.1): <https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/>
 - Source code and issue tracker: <https://github.com/why-ban/PeakSafeOptimizer>
 
 ## Installation
