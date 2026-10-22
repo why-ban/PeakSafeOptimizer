@@ -6,6 +6,17 @@ Most of what it does is invisible. Most of its 37 patches are *equivalence-prove
 
 There are no numbers to tune. Every threshold is a constant in the code, next to the reasoning that picked it.
 
+> **Account migration.** The Thunderstore account that owns this page is linked to a GitHub account
+> that has been banned. If that ban is not lifted, every future update will be published under
+> [khalil2](https://thunderstore.io/c/peak/p/khalil2/) instead of here. Follow that page to keep
+> receiving updates - this one would stay frozen at its last release.
+
+## Links
+
+- Thunderstore, original page: <https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/>
+- Thunderstore, new page if the ban is not lifted: <https://thunderstore.io/c/peak/p/khalil2/>
+- Source code and issue tracker: <https://github.com/why-ban/PeakSafeOptimizer>
+
 ## Installation
 
 **Mod manager (recommended):** click Install. BepInEx is pulled in automatically.

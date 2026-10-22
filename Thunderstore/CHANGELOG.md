@@ -94,6 +94,15 @@ to the previous one. All of it was cut back to the load-bearing minimum - invari
 constraints, null-semantics choices, and the one sentence per patch that says why it is equivalent.
 About 5,400 lines of commentary are gone; the code is unchanged by that pass.
 
+### Packaging
+
+New icon: the old one was a generated gradient image that did not look like it belonged to this game.
+The new one is a flat badge - a mustard ridge under a paper snow cap, an orange bolt in the sky - drawn
+in the game's own palette, with both the English and the Chinese name on it.
+
+The Thunderstore README now carries the account-migration notice: the account that owns the original
+page is bound to a banned GitHub account, and if the ban is not lifted, releases move to `khalil2`.
+
 ## 1.4.1
 
 The game shipped another update (Assembly-CSharp MVID `c88cc526-…` -> `e053d265-…`). Only
