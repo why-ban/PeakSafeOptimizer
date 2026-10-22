@@ -10,24 +10,10 @@ using Zorro.Core;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Full narrow replacement of Campfire.ApplyCampfireProtection() (audited source
-    /// Campfire.cs:222-237). The original performs the same full-player scan twice in one frame:
-    /// once inside EveryoneInRange() (which already populates _charactersInRadius) and once inside
-    /// PlayerCharactersInRadius(moraleBoostRadius) at the same radius. This patch performs a single
-    /// scan that both produces the same final _charactersInRadius contents and computes
-    /// everyoneInRange, then reuses those results for both the OrbFogHandler write and the buff
-    /// branch, preserving the original semantics exactly.
-    ///
-    /// Equivalence notes:
-    ///   - _charactersInRadius must end up holding exactly the alive players satisfying
-    ///     !(Vector3.Distance(pos, center) > moraleBoostRadius), in PlayerHandler order. That is
-    ///     what the original PlayerCharactersInRadius leaves behind, and the single scan reproduces it.
-    ///   - everyoneInRange equals the original EveryoneInRange(): true iff every alive player is in
-    ///     range. With PlayerHandler.Exists == false, GetAllPlayerCharacters() yields an empty list,
-    ///     so everyoneInRange is true and _charactersInRadius is empty, matching the original.
-    ///   - The buff branch uses localInRange = _charactersInRadius.Contains(localCharacter); a null
-    ///     localCharacter yields false (List.Contains handles null), and the buff branch defensively
-    ///     skips (with one rate-limited diagnostic) instead of the original's NullReferenceException.
+    /// Campfire.ApplyCampfireProtection scans the player roster twice at the same radius, once through
+    /// EveryoneInRange() and once through PlayerCharactersInRadius(). One scan reproduces both results
+    /// and leaves _charactersInRadius with the same contents. A null local character is skipped where
+    /// the original would throw.
     /// </summary>
     internal static class CampfireProtectionMergePatch
     {
@@ -45,8 +31,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 typeof(Campfire), "_timebuffLastApplied", typeof(float));
             ScaleValidation.RequireInstanceField(typeof(Campfire), "moraleBoostRadius", typeof(float));
 
-            // s_CampfireBuff is a private static Affliction_NoHunger; type-checked once, but its
-            // current value is read every Prefix so a runtime reassignment is never missed.
             FieldInfo buffField = typeof(Campfire).GetField(
                 "s_CampfireBuff", BindingFlags.Static | BindingFlags.NonPublic);
             if (buffField == null || !buffField.IsStatic ||
@@ -76,8 +60,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 typeof(CharacterAfflictions), "AddAffliction", typeof(void),
                 new[] { typeof(Affliction), typeof(bool) }, true);
 
-            // OrbFogHandler is a Singleton<OrbFogHandler>; its Instance getter and the
-            // PlayersAreResting setter must keep the audited shape.
             ScaleValidation.RequireStaticProperty(
                 typeof(Singleton<OrbFogHandler>), "Instance", typeof(OrbFogHandler));
             ScaleValidation.RequireInstanceProperty(
@@ -129,7 +111,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
-            // Single scan: reproduce EveryoneInRange() + PlayerCharactersInRadius() in one pass.
             bool everyone = true;
             inRadius.Clear();
             if (PlayerHandler.Exists)
@@ -156,13 +137,10 @@ namespace PeakSafeOptimizer.Patches.Scale
                 }
             }
 
-            // OrbFogHandler write uses everyoneInRange (same as the original EveryoneInRange()).
             OrbFogHandler fog = Singleton<OrbFogHandler>.Instance;
             if ((bool)fog)
                 fog.PlayersAreResting = everyone;
 
-            // Buff branch: !Exists || localInRange. A null localCharacter is false here and
-            // defensively skipped below instead of throwing.
             Character local = Character.localCharacter;
             bool localInRange = local != null && inRadius.Contains(local);
             if (!PlayerHandler.Exists || localInRange)

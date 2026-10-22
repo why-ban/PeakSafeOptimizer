@@ -93,12 +93,8 @@ namespace PeakSafeOptimizer.Infrastructure
                 try { module.Register(context); }
                 catch (Exception ex) { AddFailure(failures, log, moduleName + " registration", Unwrap(ex)); continue; }
 
-                // One pass, and no sentinel value at all: the previous form asked FirstOrDefault for
-                // the offending id and then asked Any whether there was one, so the "no duplicate"
-                // case produced PatchId's zero value (RunBasedValues) as a throwaway and correctness
-                // rested on Any guarding it. A nullable holds "there was none" explicitly instead.
-                // Same verdict and same reported id: the first key of this module that another module
-                // already registered, in the module's own enumeration order.
+                // A nullable rather than a sentinel: PatchId's zero value is a real id, so FirstOrDefault
+                // would need a second query to tell "none" apart from RunBasedValues
                 PatchId? duplicate = null;
                 foreach (PatchId id in context.Factories.Keys)
                 {

@@ -8,29 +8,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Same-frame coalescing for CharacterItems.RefreshAllCharacterCarryWeightRPC() (audited source
-    /// CharacterItems.cs:479-487), which walks PlayerHandler.GetAllPlayerCharacters() and calls
-    /// CharacterAfflictions.UpdateWeight() on every one of them.
-    ///
-    /// Content-signature merge: the previous frame+player-count gate could drop a same-frame refresh
-    /// whose inputs had actually changed, because Photon can dispatch multiple RPCs in one frame
-    /// (Player.SyncInventoryRPC changes the inventory, then triggers
-    /// RefreshAllCharacterCarryWeightRPC; Player.cs:182-192). CharacterAfflictions.UpdateWeight
-    /// (CharacterAfflictions.cs:408-490) reads far more than the roster size: each character's
-    /// itemSlots, backpack internal slots, temp slot 250, carriedPlayer,
-    /// StickyItemComponent.ALL_STUCK_ITEMS, currentStickyItem and isSkeleton. A same-frame second
-    /// refresh is now skipped only when the folded signature of all of those inputs is unchanged.
-    ///
-    /// The signature accumulates an int hash over the roster (O(P x slots) plus one pass over the
-    /// stuck items), strictly cheaper than P full UpdateWeight calls which include
-    /// ItemDatabase.TryGetItem linear lookups. It allocates nothing (integer accumulation only, no
-    /// collections or strings). A null roster or any null element/dependency defers to the untouched
-    /// method so the original keeps its own behavior.
-    ///
-    /// Return contract: the first call of a frame returns true so the original runs normally; a
-    /// later call in the same frame whose content signature is unchanged returns false (coalescing).
-    /// Any signature change, a different frame, or any null input always runs the original.
-    /// UpdateWeight itself is never re-implemented or wrapped here.
+    /// Same-frame coalescing for CharacterItems.RefreshAllCharacterCarryWeightRPC. A call is skipped only
+    /// when an earlier call in the same frame already ran the original with the same folded content
+    /// signature, so the skipped one would have been a no-op: UpdateWeight recomputes from scratch and its
+    /// SetStatus writes are absolute. The signature is a hash, so a collision drops a refresh.
     /// </summary>
     internal static class WeightRefreshCoalescingPatch
     {
@@ -55,12 +36,11 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceField(typeof(ThornOnMe), "type", typeof(int));
             ScaleValidation.RequireInstanceMethod(
                 typeof(ThornOnMe), "GetThornDamage", typeof(int), Type.EmptyTypes, true);
+            ScaleValidation.RequireStaticProperty(typeof(Ascents), "etcDamageMultiplier", typeof(float));
 
-            // Proof that the per-character work is unchanged; never invoked from here.
             ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterAfflictions), "UpdateWeight", typeof(void), Type.EmptyTypes, false);
 
-            // Content-signature dependencies: every member the audited UpdateWeight reads.
             ScaleValidation.RequireInstanceProperty(typeof(Character), "player", typeof(Player));
             ScaleValidation.RequireInstanceField(typeof(Character), "data", typeof(CharacterData));
             ScaleValidation.RequireInstanceField(typeof(Player), "itemSlots", typeof(ItemSlot[]));
@@ -132,19 +112,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             int frame = Time.frameCount;
             if (!TryComputeSignature(characters, out int signature))
             {
-                // A null roster element (or missing dependency) makes the picture incomplete:
-                // never coalesce; let the original method run and surface its own behavior.
                 _hasRun = false;
                 _lastRefreshFrame = 0;
                 _lastSignature = 0;
                 return true;
             }
 
-            // Force execution on: first sight, any different frame, a recorded frame in the future
-            // (time going backwards / scene switch resetting frameCount), or any signature change.
             if (!_hasRun ||
                 frame != _lastRefreshFrame ||
-                _lastRefreshFrame > frame ||
                 signature != _lastSignature)
             {
                 _hasRun = true;
@@ -153,31 +128,20 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
-            // Same frame, identical content signature: this is the patch working as designed, not a
-            // repair and not a fallback. RateLimitedDiagnostics is deliberately not used here -
-            // diagnostics are reserved for repairs and fallbacks (the ban is spelled out in
-            // DetailBodypartThrottlePatch.cs:198-203), and counting a successful coalesce as a
-            // "repair reason" would pollute the counters used as evidence of vanilla faults.
+            // The designed path, not a repair or a fallback, so no diagnostics here
             return false;
         }
 
-        /// <summary>
-        /// Folds every input the audited UpdateWeight reads into a single int, without allocating.
-        /// Returns false (signature unusable) when the roster or any element/dependency is null, so
-        /// the caller defers to the untouched method.
-        /// </summary>
+        /// Folds every input UpdateWeight reads into one int. Returns false when the roster or any element is null, so the caller defers
         private static bool TryComputeSignature(List<Character> characters, out int signature)
         {
             signature = 0;
             int hash = 17;
             int count = characters.Count;
             hash = unchecked(hash * 31 + count);
-            // ThornOnMe.GetThornDamage() multiplies by this global value. Include its exact bit
-            // pattern so a same-frame multiplier change cannot reuse an old folded signature.
+            // GetThornDamage multiplies by this global, so its bits are part of the content
             hash = unchecked(hash * 31 + BitConverter.SingleToInt32Bits(Ascents.etcDamageMultiplier));
 
-            // Global stuck-item inventory: UpdateWeight iterates ALL_STUCK_ITEMS for every character,
-            // so its contents (count, target identity, and both increments) are folded once here.
             List<StickyItemComponent> stuck = StickyItemComponent.ALL_STUCK_ITEMS;
             if (stuck == null)
                 return false;

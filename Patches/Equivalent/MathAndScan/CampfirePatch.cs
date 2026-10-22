@@ -7,13 +7,25 @@ using UnityEngine;
 
 namespace PeakSafeOptimizer.Patches.Equivalent.MathAndScan
 {
+    /// <summary>
+    /// Replacement for Campfire.EveryoneInRange(float), a per-frame call per lit campfire. A live player is in
+    /// _charactersInRadius exactly when !(Vector3.Distance(position, character.Center) > range), so "absent
+    /// from that list" and "out of range" are one predicate. The negated form is kept for equality, negative
+    /// range and NaN, and the scan leaves the list holding the same players in the same order.
+    /// </summary>
     internal static class CampfirePatch
     {
         private static AccessTools.FieldRef<Campfire, List<Character>> _charactersInRadius;
 
         internal static void Initialize()
         {
-            ResolveAndValidateTarget();
+            MethodInfo target = ResolveAndValidateTarget();
+            if (!string.Equals(target.GetParameters()[0].Name, "range", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Campfire.EveryoneInRange parameter is no longer named range");
+            }
+
             FieldInfo charactersInRadiusField = MathAndScanValidation.RequireInstanceField(
                 typeof(Campfire), "_charactersInRadius", typeof(List<Character>));
             if (charactersInRadiusField.IsInitOnly)
@@ -30,6 +42,16 @@ namespace PeakSafeOptimizer.Patches.Equivalent.MathAndScan
             MathAndScanValidation.RequireStaticMethod(
                 typeof(Vector3), "Distance", typeof(float),
                 new[] { typeof(Vector3), typeof(Vector3) }, true);
+
+            PropertyInfo campfireTransform = typeof(Campfire).GetProperty(
+                "transform", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            MethodInfo campfireTransformGetter = campfireTransform?.GetGetMethod(true);
+            if (campfireTransform == null || campfireTransform.PropertyType != typeof(Transform) ||
+                campfireTransform.GetIndexParameters().Length != 0 ||
+                campfireTransformGetter == null || campfireTransformGetter.IsStatic)
+            {
+                throw new InvalidOperationException("Campfire.transform failed structural self-check");
+            }
 
             AccessTools.FieldRef<Campfire, List<Character>> charactersInRadius =
                 AccessTools.FieldRefAccess<Campfire, List<Character>>(charactersInRadiusField);
@@ -55,8 +77,6 @@ namespace PeakSafeOptimizer.Patches.Equivalent.MathAndScan
             AccessTools.FieldRef<Campfire, List<Character>> charactersInRadiusRef = _charactersInRadius;
             if (charactersInRadiusRef == null)
             {
-                // This is patch-owned state, not an original-method failure. Let the game
-                // run its unmodified method rather than introducing a runtime exception.
                 RateLimitedDiagnostics.Hit("Campfire.charactersInRadius-fieldref-unavailable");
                 return true;
             }
@@ -65,8 +85,6 @@ namespace PeakSafeOptimizer.Patches.Equivalent.MathAndScan
             List<Character> charactersInRadius = charactersInRadiusRef(__instance);
             if (charactersInRadius == null)
             {
-                // Preserve the original method's behavior for game-owned null state. Do not
-                // catch or suppress any exception that the original method itself may raise.
                 RateLimitedDiagnostics.Hit("Campfire.charactersInRadius-null-fallback-original");
                 return true;
             }
@@ -80,8 +98,6 @@ namespace PeakSafeOptimizer.Patches.Equivalent.MathAndScan
                 if (character.data.dead)
                     continue;
 
-                // Preserve the original !(Distance > range) comparison exactly, including
-                // equality, negative range and NaN behavior.
                 if (!(Vector3.Distance(position, character.Center) > range))
                     charactersInRadius.Add(character);
                 else

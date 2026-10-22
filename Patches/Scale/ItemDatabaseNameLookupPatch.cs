@@ -7,20 +7,10 @@ using PeakSafeOptimizer.Diagnostics;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Name lookup replacement for ItemDatabase.TryGetItem(string, out Item) (audited source
-    /// ItemDatabase.cs:82-93). The original scans itemLookup linearly on every call, comparing
-    /// item2.Value.gameObject.name == itemNameOnFile per entry and, because it never breaks on a
-    /// match, a later duplicate name overwrites an earlier one.
-    ///
-    /// This patch builds a Dictionary&lt;string, Item&gt; once by iterating itemLookup in the same
-    /// order and overwriting on every match, which reproduces the last-match-wins semantics exactly.
-    /// The cache is rebuilt whenever itemLookup.Count changes (scene reload). If the singleton is
-    /// null, the lookup list is null, or any value is null, the prefix defers to the original.
-    ///
-    /// ItemDatabase is reached entirely through reflection: its base chain ends in
-    /// Sirenix.SerializedScriptableObject (unreferenced), so the type, the static
-    /// SingletonAsset&lt;ItemDatabase&gt;.Instance getter, and the itemLookup field are all resolved once
-    /// during Initialize and bound to delegates so the hot path stays allocation free.
+    /// Name lookup replacement for ItemDatabase.TryGetItem(string, out Item). Vanilla scans itemLookup
+    /// linearly and never breaks, so a later duplicate name wins; the dictionary is built in the same
+    /// enumeration order and rebuilt when the instance, Count or version changes. A rename does not
+    /// move the version, so a hit is re-validated against the live name and a miss still defers.
     /// </summary>
     internal static class ItemDatabaseNameLookupPatch
     {
@@ -214,8 +204,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             Item found;
             if (cache.TryGetValue(itemNameOnFile, out found))
             {
-                // A Unity object can be destroyed or renamed without changing Dictionary._version.
-                // Defer to vanilla on a stale hit so it can perform its normal linear lookup.
                 if (found == null || found.gameObject == null || found.gameObject.name != itemNameOnFile)
                     return true;
                 item = found;
@@ -223,8 +211,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             }
             else
             {
-                // A cache miss is not proof that vanilla would miss: an item can be renamed without
-                // changing Dictionary._version. Let the original preserve that lookup semantics.
                 return true;
             }
             return false;

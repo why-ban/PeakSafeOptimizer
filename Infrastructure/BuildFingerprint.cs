@@ -7,15 +7,11 @@ namespace PeakSafeOptimizer.Infrastructure
 {
     public sealed class BuildFingerprint
     {
-        /// <summary>
-        /// MVID of the Assembly-CSharp this plugin's equivalence arguments were last re-audited
-        /// against. It is reported in the startup log and nothing else: it does not gate installation.
-        /// A patch installs when its own Initialize/ResolveTarget assertions pass, so a game update
-        /// that leaves the members a patch reads unchanged keeps that patch working without a release.
-        /// What this constant says is "somebody has read the decompiled bodies of this build" - when
-        /// the log shows structural-validation instead of certified, the Fingerprint and StrictIl
-        /// patches are the ones worth re-reading.
-        /// </summary>
+        // MVID of the Assembly-CSharp the equivalence arguments were last re-audited against. Reported
+        // in the startup log and nothing else: it does not gate installation, so a game update that
+        // leaves the members a patch reads unchanged keeps that patch working without a release. When
+        // the log shows structural-validation, the Fingerprint and StrictIl patches are the ones worth
+        // re-reading
         public static readonly Guid CurrentAssemblyCSharpMvid = new Guid("60e20675-8e5a-4ad9-9b5a-c31f273b85fc");
 
         private BuildFingerprint(Guid actualMvid, string sha256)

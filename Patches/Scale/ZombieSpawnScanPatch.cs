@@ -8,14 +8,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Equivalent replacement of MushroomZombieSpawner.ReadyToSpawn() (audited source
-    /// MushroomZombieSpawner.cs:41-59), called for every registered spawner every frame from
-    /// ZombieManager.Update (ZombieManager.cs:54-62) on the master client only.
-    ///
-    /// Only change: the single `Vector3.Distance(...) &lt;= mushroomZombiePrefab.distanceToEnable`
-    /// comparison becomes a squared comparison. The threshold must be non-negative for that to be
-    /// equivalent, otherwise the original method runs. The original already returns on the first
-    /// hit, so no loop restructuring is needed; the two early `false` returns are preserved.
+    /// Equivalent replacement of MushroomZombieSpawner.ReadyToSpawn. The squared comparison is exact
+    /// because the threshold is non-negative and the original comparison is non-strict; a negative
+    /// threshold falls back to the original. transform.position is hoisted out of the loop because
+    /// nothing in it moves the spawner.
     /// </summary>
     internal static class ZombieSpawnScanPatch
     {
@@ -66,7 +62,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
-            // MushroomZombieSpawner.cs:43-50, unchanged.
             if (__instance.spawnedZombie != null || spawnedRef(__instance))
             {
                 __result = false;

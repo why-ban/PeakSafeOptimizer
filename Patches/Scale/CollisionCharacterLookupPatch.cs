@@ -6,12 +6,10 @@ using HarmonyLib;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Equivalent fast path for CharacterMovement.StandOnPlayer(Collision) (audited source
-    /// CharacterMovement.cs:968-998). CharacterRagdoll registers each Bodypart's
-    /// RigCreatorCollider capsule with that ragdoll's Character, so a dictionary hit is the same
-    /// Character that GetComponentInParent would return. A miss defers to the untouched original,
-    /// preserving non-bodypart child-collider behavior. The local crouch check is also moved ahead
-    /// of collision access because it is independent of the looked-up character.
+    /// Fast path for CharacterMovement.StandOnPlayer(Collision). CharacterRagdoll registers every
+    /// bodypart capsule with its Character, so a dictionary hit is the same Character that
+    /// GetComponentInParent would return. A miss defers to the original, which keeps non-bodypart
+    /// colliders behaving as before.
     /// </summary>
     internal static class CollisionCharacterLookupPatch
     {
@@ -58,7 +56,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 new[] { colliderType, typeof(Character).MakeByRefType() },
                 true);
 
-            // Validate the complete registration proof used by the fast path.
             ScaleValidation.RequireStaticField(
                 typeof(CharacterRagdoll), "COLLIDERS_TO_CHARACTERS", colliderMapType);
             ScaleValidation.RequireInstanceField(

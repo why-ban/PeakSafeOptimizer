@@ -8,11 +8,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Narrow equivalent replacement of CharacterHeatEmission.Update() (audited source
-    /// CharacterHeatEmission.cs:20-40). Ordering is preserved exactly:
-    /// hip position write -> sinceAddedCold early exit -> counter accumulation and rate gate
-    /// -> counter reset -> per-character scan -> SubtractStatus(Cold, heatAmount).
-    /// The only behavioral change is how the distance test is evaluated; see EvaluateRadius.
+    /// CharacterHeatEmission.Update with a squared-distance test, valid because radius > 0 here:
+    /// sqrMagnitude < radius*radius is then equivalent to Vector3.Distance < radius. The radius guard
+    /// must decide before any field write or a fallback adds deltaTime twice. The owner short-circuit
+    /// relies on SubtractStatus returning before it mutates when the character is not mine.
     /// </summary>
     internal static class HeatEmissionScanPatch
     {
@@ -66,11 +65,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (character == null || counter == null)
                 throw new InvalidOperationException("HeatEmissionScan FieldRef creation failed");
 
-            // Owner short-circuit is only enabled when the audited guard is still present:
-            // SubtractStatus returns immediately, before any mutation, when
-            // (!character.photonView.IsMine && !fromRPC). See CharacterAfflictions.cs:887-892.
-            // The afflictions -> character back reference must exist so the guard subject can be
-            // proven identical to the scanned character; otherwise the optimization is skipped.
             _ownerShortCircuitProven = false;
             _afflictionsCharacter = null;
             try
@@ -87,7 +81,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             }
             catch (Exception)
             {
-                // Structure not provable on this build: keep the unconditional call path.
                 _ownerShortCircuitProven = false;
                 _afflictionsCharacter = null;
             }
@@ -155,20 +148,15 @@ namespace PeakSafeOptimizer.Patches.Scale
             float radiusSqr = radius * radius;
             if (radius > 0f && (!(radiusSqr > 0f) || float.IsInfinity(radiusSqr)))
             {
-                // Decide before any field write. Falling back after counter reset would make the
-                // original add delta a second time and leave a different counter value.
                 RateLimitedDiagnostics.Hit("HeatEmissionScan.radius-out-of-square-range");
                 return true;
             }
 
-            // Step 1: unchanged position write.
             selfTransform.position = hipTransform.position;
 
-            // Step 2: unchanged cold-recency early exit.
             if (data.sinceAddedCold < 3f)
                 return false;
 
-            // Step 3: unchanged counter accumulation and rate gate.
             float counter = counterRef(__instance) + Time.deltaTime;
             if (counter < __instance.rate)
             {
@@ -179,9 +167,6 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             if (!(radius > 0f))
             {
-                // radius <= 0 or NaN: the original `Distance < radius` is false for every
-                // character (Distance is non-negative, and any NaN comparison is false), so the
-                // loop can be skipped without losing a single side effect.
                 return false;
             }
 
@@ -197,8 +182,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     continue;
 
                 Vector3 delta = origin - candidate.Center;
-                // radius > 0 here, so sqrMagnitude < radius*radius is exactly equivalent to
-                // Vector3.Distance(origin, center) < radius for all finite and NaN inputs.
                 if (!(delta.sqrMagnitude < radiusSqr))
                     continue;
 
@@ -210,8 +193,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 if (ownerShortCircuit && afflictionsCharacterRef != null &&
                     afflictionsCharacterRef(afflictions) == candidate && !candidate.photonView.IsMine)
                 {
-                    // Proven no-op on this build: SubtractStatus returns before mutating anything
-                    // when the guarded character is not owned locally and fromRPC is false.
                     continue;
                 }
 

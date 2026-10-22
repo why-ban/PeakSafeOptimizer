@@ -18,7 +18,7 @@ namespace PeakSafeOptimizer
     {
         public const string PluginGuid = "com.peak.safeoptimizer";
         public const string PluginName = "PeakSafeOptimizer";
-        public const string PluginVersion = "1.4.1";
+        public const string PluginVersion = "1.5.0";
 
         private Harmony _harmony;
         private LifecycleRegistry _lifecycle;
@@ -45,18 +45,13 @@ namespace PeakSafeOptimizer
 
                 _harmony = new Harmony(PluginGuid);
                 _installer = new PatchInstaller(_harmony, fingerprint, Logger);
-                // Group membership drives all-or-nothing installation: a switch that covers several
-                // patches must never leave them half installed, because those sets are only correct
-                // together (see OptimizerConfig.GetGroupMembers).
+                // Group membership drives all-or-nothing installation, see OptimizerConfig.GetGroupMembers
                 _installer.SetGroupResolver(_settings.GetGroupMembers);
                 PatchCatalogSnapshot catalog = PatchCatalog.Discover(typeof(Plugin).Assembly, _settings, _lifecycle, Logger);
                 PatchStatus status = _installer.Install(catalog);
-                // Multi-line, item-by-item report. Every line keeps the "PeakSafeOptimizer" prefix so
-                // one grep still pulls the whole report out of a shared BepInEx log.
                 foreach (string line in status.FormatReport())
                     Logger.LogInfo(line);
 
-                // Non-Harmony lanes, both driven from Update and both restoring what they found.
                 _boneWeightCap = new BoneWeightCap(Logger);
                 _collisionReuse = new CollisionCallbackReuse(Logger);
                 _collisionReuse.Evaluate(_installer);
@@ -70,14 +65,12 @@ namespace PeakSafeOptimizer
             }
         }
 
-        /// <summary>
-        /// Best-effort rollback for a failed Awake: leave nothing patched, nothing subscribed and no
-        /// registered cleanup pending. Each step is isolated so one failure cannot block the others.
-        /// </summary>
+        // Best-effort rollback for a failed Awake: nothing patched, nothing subscribed, no cleanup left
+        // pending. Each step is isolated so one failure cannot block the others
         private void RollbackAfterFailedStartup()
         {
-            // Unconditional: -= on a handler that was never added is a no-op, and this way the
-            // rollback does not depend on how far Awake got before throwing.
+            // Unconditional: -= on a handler that was never added is a no-op, so the rollback does not
+            // depend on how far Awake got
             try
             {
                 Config.SettingChanged -= OnSettingChanged;
@@ -87,11 +80,9 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Startup rollback: unsubscribe SettingChanged failed safely: {ex.GetType().Name}: {ex.Message}");
             }
 
-            // Engine-global state first, in the same order as OnDestroy: Physics.reuseCollisionCallbacks
-            // is only safe while the Snowball guards are live, so the flag has to come down before the
-            // guards are detached, not after. It also runs unconditionally, because this component
-            // keeps receiving Update after a failed Awake and leaving the lanes armed would keep
-            // writing engine state for a plugin that has already given up.
+            // Engine-global state first, as in OnDestroy: the flag is only safe while the Snowball
+            // guards are live, so it has to come down before they are detached. Also unconditional,
+            // because this component keeps receiving Update after a failed Awake
             ShutdownGlobalLanes();
 
             bool fullyUninstalled = UninstallAll("Startup rollback");
@@ -126,12 +117,12 @@ namespace PeakSafeOptimizer
                     return; // Value-typed entries already take effect at runtime; nothing to do.
                 }
 
-                // ConfigEntry.Value changes before BepInEx raises SettingChanged. Queue background
-                // writes instead of letting the visible setting and installed Harmony state diverge.
+                // ConfigEntry.Value is already updated when BepInEx raises SettingChanged, so a write
+                // from a background thread is queued to Update instead of letting the visible setting
+                // and the installed Harmony state diverge.
                 //
-                // One id per switch, not one per patch: the installer now installs and removes a whole
-                // group as a unit, so handing it every member would repeat the same work and report
-                // "already installed" for the rest.
+                // One id per switch: the installer handles the whole group, so passing every member
+                // would repeat the same work
                 if (ids.Count == 0)
                     return;
                 PatchId representative = ids[0];
@@ -153,10 +144,9 @@ namespace PeakSafeOptimizer
                 ApplySettingChange(id);
 
             _boneWeightCap?.Update(Time.unscaledDeltaTime);
-            // Both non-Harmony lanes are polled rather than event driven. Their config entries are not
-            // patch toggles, so BepInEx' SettingChanged path (which may fire off the main thread)
-            // deliberately ignores them; polling makes hot reload work for them without a second queue.
-            // Evaluate is idempotent and early-outs on a config read plus two dictionary lookups.
+            // Both non-Harmony lanes are polled, not event driven: their config entries are not patch
+            // toggles, so SettingChanged ignores them, and polling makes hot reload work for them
+            // without a second queue
             _collisionReuse?.Evaluate(_installer);
         }
 
@@ -166,16 +156,14 @@ namespace PeakSafeOptimizer
                 return;
             bool enabled = _settings.IsEnabled(id);
 
-            // Engine-global state comes down before the patch set changes, and goes back up from the
-            // Update poll afterwards. Physics.reuseCollisionCallbacks is only safe while both Snowball
-            // guards are live, and this call happens synchronously while Evaluate is polled once per
-            // frame - so without this the window between them would run vanilla Snowball against a
-            // reused Collision instance.
+            // Engine-global state comes down before the patch set changes and goes back up from the
+            // Update poll afterwards: the flag is only safe while both Snowball guards are live, and
+            // this call is synchronous while Evaluate is polled once per frame
             _collisionReuse?.SuspendForPatchChange();
 
             PatchStatus status = _installer.Toggle(id, enabled);
-            // Re-arm immediately rather than waiting for the next frame's poll, so a toggle that
-            // leaves both guards installed does not lose the flag for a frame.
+            // Re-arm immediately rather than waiting for the next poll, so a toggle that leaves both
+            // guards installed does not lose the flag for a frame
             _collisionReuse?.Evaluate(_installer);
 
             PatchStatusEntry entry = status.Entries.Count > 0 ? status.Entries[0] : null;
@@ -199,8 +187,8 @@ namespace PeakSafeOptimizer
                     break;
             }
 
-            // A group switch produces one entry per member; report the rest too, so a rollback is
-            // visible in the log instead of only its first line.
+            // A group switch produces one entry per member. Report the rest too, so a rollback is
+            // visible instead of only its first line
             for (int i = 1; i < status.Entries.Count; i++)
             {
                 PatchStatusEntry extra = status.Entries[i];
@@ -222,7 +210,7 @@ namespace PeakSafeOptimizer
                 Logger.LogError($"Unsubscribe SettingChanged failed: {ex}");
             }
 
-            // Engine-global state first: it is not tied to whether the Harmony uninstall succeeds.
+            // Engine-global state first: it is not tied to whether the Harmony uninstall succeeds
             ShutdownGlobalLanes();
 
             bool fullyUninstalled = UninstallAll("Shutdown");
@@ -265,10 +253,8 @@ namespace PeakSafeOptimizer
             }
         }
 
-        /// <summary>
-        /// Restores the graphics caps and the collision-reuse flag. Each step is isolated so one
-        /// failure cannot block the other.
-        /// </summary>
+        // Restores the graphics caps and the collision-reuse flag. Each step is isolated so one
+        // failure cannot block the other
         private void ShutdownGlobalLanes()
         {
             try

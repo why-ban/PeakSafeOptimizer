@@ -6,24 +6,13 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Accessor factories for audited game members that cannot be bound with plain
-    /// <c>typeof(...)</c> at compile time - either because the declaring or element type lives in an
-    /// assembly this project does not reference (Unity.Mathematics for ItemPhysicsSyncData.position,
-    /// and the enum parameter of Rigidbody.AddForce is resolved by name for the same reason), or
-    /// because the member is non-public. UnityEngine.PhysicsModule itself *is* referenced by the
-    /// csproj (PeakSafeOptimizer.csproj:44-47), so Rigidbody and Collider are available as types;
-    /// the by-name lookups that remain are kept deliberately, because UnityEngine.dll is a
-    /// type-forwarding facade and some modules are still unreferenced, and mixing the two styles is
-    /// harder to audit than using by-name consistently in this helper.
-    /// Everything is emitted once during Initialize so hot paths stay allocation free and never
-    /// use MethodInfo.Invoke.
+    /// Accessor factories for audited members typeof cannot bind at compile time: the declaring or element
+    /// type is in an unreferenced assembly, or the member is non-public. DynamicMethod rather than
+    /// MethodInfo.Invoke because everything is emitted once in Initialize and the hot paths must stay
+    /// allocation free. The bodies are hand-written IL: keep the stack balanced and load structs by address.
     /// </summary>
     internal static class ScaleExperimentalEmit
     {
-        /// <summary>
-        /// Binds an audited non-public instance method as a strongly typed delegate so the hot path
-        /// never uses MethodInfo.Invoke.
-        /// </summary>
         internal static TDelegate CreateDelegate<TDelegate>(MethodInfo method) where TDelegate : Delegate
         {
             if (method == null) throw new ArgumentNullException(nameof(method));
@@ -51,13 +40,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             return (Func<TInstance, TValue>)method.CreateDelegate(typeof(Func<TInstance, TValue>));
         }
 
-        /// <summary>
-        /// Returns the Transform of the first element of a reference-typed array field, or null when
-        /// the array is null or empty. Element type is taken from the FieldInfo rather than named at
-        /// compile time (for example UnityEngine.Collider), which keeps this helper usable for array
-        /// fields whose element type this project does not reference - see the by-name note on the
-        /// type.
-        /// </summary>
         internal static Func<TInstance, Transform> CreateFirstElementTransformGetter<TInstance>(FieldInfo arrayField)
         {
             if (arrayField == null) throw new ArgumentNullException(nameof(arrayField));
@@ -116,12 +98,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             return (Func<TInstance, Transform>)method.CreateDelegate(typeof(Func<TInstance, Transform>));
         }
 
-        /// <summary>
-        /// Reads a Vector3-convertible field from a value type, applying an implicit conversion
-        /// operator when the field type is not Vector3 itself. Used for
-        /// ItemPhysicsSyncData.position, whose declared type lives in Unity.Mathematics which this
-        /// project does not reference.
-        /// </summary>
         internal static Func<TStruct, Vector3> CreateStructVector3FieldGetter<TStruct>(FieldInfo field)
             where TStruct : struct
         {
@@ -246,11 +222,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             return getter;
         }
 
-        /// <summary>
-        /// Emits a call to an instance method taking (Vector3, intBackedEnum), resolving both the
-        /// declaring type and the enum by name rather than with typeof - see the by-name note on the
-        /// type. The single caller is Rigidbody.AddForce(Vector3, ForceMode).
-        /// </summary>
         internal static Action<UnityEngine.Object, Vector3, int> CreateVector3EnumAction(
             Type declaringType, MethodInfo target)
         {

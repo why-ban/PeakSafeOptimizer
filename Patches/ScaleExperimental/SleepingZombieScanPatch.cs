@@ -9,29 +9,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Equivalent replacement of MushroomZombie.DoSleeping() (audited source
-    /// MushroomZombie.cs:506-526), reached every frame from MushroomZombie.Update while the zombie
-    /// is in the Sleeping state.
-    ///
-    /// Two changes, both equivalent to well under one ULP of the original's judgement:
-    /// 1. Squared distance for the `num &lt; distanceBeforeWakeup` test. It is NOT bit-exact: the
-    ///    original compares `Vector3.Distance(a, b) &lt; t`, i.e. `(float)Math.Sqrt(d) &lt; t`, while
-    ///    this compares `d &lt; t*t`. `t*t` rounds once in float, and a square root moves the
-    ///    comparison onto a different quantum, so for thresholds where `t*t` is not exactly
-    ///    representable there is a band at most one ULP wide in `d` where the two disagree. Over the
-    ///    plausible threshold values (1, 2, 3, 5, 8, 10, 20, 30, 50, 100, 300, 0.5, 0.7, 1.5)
-    ///    roughly half have such a band, and when it exists the patch is slightly more permissive.
-    ///    The probability of a real zombie landing in it is on the order of 1e-10 per test - far
-    ///    below any observable effect - but the claim is "equivalent to within one ULP", not
-    ///    "provably identical". A non-positive threshold falls back to the original method, because
-    ///    there the original can never pass.
-    /// 2. Vector3.Angle is computed only after the distance test passes. In the original the angle
-    ///    is computed for every valid target before the compound condition is evaluated, but
-    ///    Vector3.Angle is a pure function with no side effects and the `&amp;&amp;` chain already
-    ///    short-circuits on the distance term, so deferring it changes nothing observable.
-    ///
-    /// Everything else is verbatim: the fallSeconds write, the `visible` early exit, TargetIsValid
-    /// filtering, the HasLineOfSight call as the last condition, WakeUpFromSleep and the break.
+    /// Equivalent replacement of MushroomZombie.DoSleeping: squared distance instead of Vector3.Distance,
+    /// which agrees to within one ULP rather than bit-exactly, and Vector3.Angle computed only after the
+    /// distance test passes. A non-positive threshold defers to the original, where the strict comparison
+    /// can never pass.
     /// </summary>
     internal static class SleepingZombieScanPatch
     {
@@ -58,6 +39,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             ScaleValidation.RequireInstanceField(typeof(Character), "refs", typeof(Character.CharacterRefs));
             ScaleValidation.RequireInstanceField(
                 typeof(Character.CharacterRefs), "head", typeof(Bodypart));
+            ScaleValidation.RequireInheritedInstanceProperty(
+                typeof(Bodypart), "transform", typeof(Transform));
             ScaleValidation.RequireInstanceField(typeof(CharacterData), "fallSeconds", typeof(float));
             ScaleValidation.RequireStaticField(typeof(Character), "AllCharacters", typeof(List<Character>));
             ScaleValidation.RequireInstanceProperty(typeof(Character), "Center", typeof(Vector3));
@@ -86,7 +69,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (targetIsValid == null || hasLineOfSight == null ||
                 wakeUpFromSleep == null || character == null)
             {
-                // Any binding failure means the patch cannot reproduce the original faithfully.
                 throw new InvalidOperationException("SleepingZombieScan delegate binding failed");
             }
 
@@ -129,18 +111,14 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 return true;
             }
 
-            // MushroomZombie.cs:508, unchanged.
             self.data.fallSeconds = 10f;
 
-            // MushroomZombie.cs:509-512, unchanged.
             if (!__instance.visible)
                 return false;
 
             float threshold = __instance.distanceBeforeWakeup;
             if (!(threshold > 0f))
             {
-                // Strict `num < threshold` can never pass for a non-negative distance here, but
-                // squaring would not preserve that; defer to the original.
                 RateLimitedDiagnostics.Hit("SleepingZombieScan.non-positive-threshold-fallback");
                 return true;
             }

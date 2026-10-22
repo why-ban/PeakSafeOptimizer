@@ -10,82 +10,13 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Line-for-line replacement of PlayerEyeLook.Update() (audited source
-    /// PlayerEyeLook.cs:58-115) with two mechanical differences: the per-frame
-    /// GetComponent&lt;AnimatedMouth&gt;() at PlayerEyeLook.cs:70 is served from a per-Character
-    /// cache (the audited IL confirms exactly one call site), and the eye material write uses the
-    /// int property id from Shader.PropertyToID("_EyePosition") instead of the string overload.
-    /// Material.SetVector(string, Vector4) is itself just SetColorImpl(Shader.PropertyToID(name),
-    /// value) (Material.cs:1849-1857), so hoisting the id out of the loop is exact.
-    ///
-    /// Everything else is preserved verbatim:
-    ///   - characters = Character.AllCharacters and distance = +Infinity every frame
-    ///   - full scan every frame (no frequency reduction)
-    ///   - nearest-distance branch first, then the speaking override branch, in that order,
-    ///     including the fact that a later speaking candidate overrides an earlier one
-    ///   - distance / character / lookDir / lookDelta / UpDelta / RightDelta / lookAngle
-    ///     written with the same values at the same points
-    ///   - InverseTransformDirection call kept (its return value is discarded upstream too)
-    ///   - eyeTarget branches, the lastCharacter 0.3f smoothing factor, eyePos lerp,
-    ///     eyeRenderers material writes and the lastViewDir threshold update
-    ///
-    /// Lifetime. The cache is a ConditionalWeakTable&lt;Character, MouthEntry&gt;, and the entry holds
-    /// the AnimatedMouth through a WeakReference&lt;AnimatedMouth&gt; rather than a strong field. That
-    /// matters because a non-ghost mouth carries a managed back-reference to the very Character used as
-    /// the key: AnimatedMouth.character (AnimatedMouth.cs:43) is assigned GetComponent&lt;Character&gt;()
-    /// in Start (AnimatedMouth.cs:72), and this patch resolves the mouth with
-    /// candidate.GetComponent&lt;AnimatedMouth&gt;() on the same GameObject. A strong field would
-    /// therefore have formed MouthEntry -&gt; Mouth -&gt; Mouth.character -&gt; key, the value-to-key
-    /// cycle AGENTS.md forbids for CWT state classes. Through a weak reference the value does not
-    /// reference its key at all, so the rule is satisfied structurally and the collectability of a
-    /// dropped Character does not depend on whether the GC's ephemeron sweep is implemented correctly.
-    ///
-    /// Why the weak reference is also free of behavioural risk: Unity roots the managed shell of a
-    /// MonoBehaviour from the native side for as long as the component is attached to a live
-    /// GameObject, so while the mouth exists the weak target cannot disappear. If it ever does - the
-    /// component destroyed, or the shell genuinely collected - <see cref="ResolveMouth"/> falls into the
-    /// path that was already there for a Unity-destroyed component and re-runs
-    /// GetComponent&lt;AnimatedMouth&gt;(), i.e. the degradation is "pay the lookup the vanilla method
-    /// pays every frame anyway". The Unity null check on the retrieved target is kept as well, because a
-    /// destroyed component still has a live managed shell that the weak reference would hand back.
-    ///
-    /// The component itself still has to be held (weakly) rather than projected to something smaller:
-    /// the hot path needs the live per-frame value of AnimatedMouth.isSpeaking plus Unity's
-    /// destroyed-object null semantics, and nothing narrower - a bool, a Renderer, a cached position -
-    /// reproduces either.
+    /// Equivalent replacement of PlayerEyeLook.Update: the per-candidate GetComponent<AnimatedMouth> and the
+    /// repeated GetBodypart(Head) lookups are resolved once and cached, the mouth through a
+    /// ConditionalWeakTable holding a WeakReference so a destroyed or replaced one is re-resolved. Selection,
+    /// the speaking override and every written field are identical; a missing accessor or null defers.
     /// </summary>
     internal static class EyeLookComponentCachePatch
     {
-        /// <summary>
-        /// Per-Character cache slot. The mouth is held through a weak reference so that this value
-        /// never references its own ConditionalWeakTable key - see the type remarks for the
-        /// AnimatedMouth.character back-reference that would otherwise close the cycle.
-        ///
-        /// The reference is created lazily, on the first *successful* resolve, and only re-targeted with
-        /// SetTarget afterwards. So the steady-state hot path allocates nothing: one WeakReference per
-        /// Character for the lifetime of that Character, and TryGetTarget only reads a GCHandle.
-        ///
-        /// Created lazily rather than in a field initializer, and never handed a null target, because
-        /// the shipped mscorlib builds WeakReference&lt;T&gt; on GCHandle
-        /// (WeakReference`1: <c>handle = GCHandle.Alloc(target, GCHandleType.Weak)</c>) and its
-        /// SetTarget writes straight through that handle: GCHandle.Target's setter takes the
-        /// <c>CanDereferenceHandle(handle)</c> branch - <c>((nint)handle &amp; 1) == 0</c>, which is true
-        /// for IntPtr.Zero - and then does <c>SetRef(handle, value)</c>, an unchecked store through the
-        /// raw pointer. Whether Mono's GetTargetHandle icall returns a non-zero handle for a null object
-        /// is not visible from managed code, and if it returned zero, a SetTarget on such an instance
-        /// would store through a null pointer. Constructing only with a real target removes the question
-        /// entirely, at the cost of one extra null check per resolve.
-        ///
-        /// The field is left with its implicit initialization to null, so MouthEntry keeps the implicit
-        /// parameterless constructor that ConditionalWeakTable.GetOrCreateValue needs (it activates
-        /// TValue through Activator.CreateInstance&lt;TValue&gt;()).
-        ///
-        /// Accepted cost of the weak reference: WeakReference&lt;T&gt; has a finalizer (it frees its
-        /// GCHandle), so one finalizable object per Character joins the finalizer queue when that
-        /// Character is collected. That is a handful of objects over a session against a GetComponent
-        /// removed from a per-frame, per-character loop, and it is the price of not having a value-to-key
-        /// cycle.
-        /// </summary>
         private sealed class MouthEntry
         {
             internal WeakReference<AnimatedMouth> Ref;
@@ -245,14 +176,10 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             List<Character> all = Character.AllCharacters;
             if (local == null || all == null)
             {
-                // The original would dereference these; defer so behavior stays identical.
                 RateLimitedDiagnostics.Hit("EyeLookComponentCache.local-or-roster-unavailable");
                 return true;
             }
 
-            // Validate every fallback dependency before the first field write: a candidate whose
-            // mouth cannot be resolved must fall back to the untouched method *before* this patch
-            // starts mutating PlayerEyeLook state, otherwise a partial write would be left behind.
             for (int i = 0; i < all.Count; i++)
             {
                 Character candidate = all[i];
@@ -263,7 +190,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 }
                 if (ResolveMouth(mouths, candidate) == null)
                 {
-                    // The original would throw a NullReferenceException on component.isSpeaking.
                     RateLimitedDiagnostics.Hit("EyeLookComponentCache.mouth-unavailable");
                     return true;
                 }
@@ -284,17 +210,12 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 }
             }
 
-            // PlayerEyeLook.cs:60-61
             charactersRef(__instance) = all;
             __instance.distance = float.PositiveInfinity;
 
-            // PlayerEyeLook.cs:62-76
             for (int i = 0; i < all.Count; i++)
             {
                 Character candidate = all[i];
-                // Pre-validated above: a null candidate already deferred to the original before any
-                // state write. This is only a defensive guard so a mid-method roster mutation cannot
-                // throw after this patch has started writing.
                 if (candidate == null)
                     continue;
 
@@ -305,7 +226,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                     __instance.character = candidate;
                 }
 
-                // Only change vs. the original: cached component lookup (guaranteed non-null above).
                 AnimatedMouth mouth = ResolveMouth(mouths, candidate);
 
                 if (num < __instance.listenRange && mouth.isSpeaking && candidate != local)
@@ -317,7 +237,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
 
             Character selected = __instance.character;
 
-            // PlayerEyeLook.cs:77-85
             if (selected != null)
             {
                 Bodypart localHead = getBodypartRef(local, BodypartType.Head);
@@ -336,7 +255,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 __instance.lookAngle = Vector3.Angle(local.data.lookDirection, lookDirRef(__instance));
             }
 
-            // PlayerEyeLook.cs:86-100
             if (selected != null && __instance.distance < __instance.lookRange &&
                 __instance.lookAngle < __instance.lookAngleMax)
             {
@@ -363,7 +281,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 eyeTargetRef(__instance) = new Vector2(num2 * __instance.XMax, num3 * (0f - __instance.YMax));
             }
 
-            // PlayerEyeLook.cs:101-110
             float num4 = 1f;
             if (selected != lastCharacterRef(__instance))
                 num4 = 0.3f;
@@ -380,7 +297,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
                 renderer.material.SetVector(eyePositionId, eyePos);
             }
 
-            // PlayerEyeLook.cs:111-114
             Bodypart finalHead = getBodypartRef(local, BodypartType.Head);
             if (finalHead != null && finalHead.transform != null)
             {
@@ -391,20 +307,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             return false;
         }
 
-        /// <summary>
-        /// The one behavioural difference from the original: the per-frame
-        /// GetComponent&lt;AnimatedMouth&gt;() at PlayerEyeLook.cs:70 is served from the cache.
-        ///
-        /// Returns exactly what GetComponent would: the attached AnimatedMouth, or null when there is
-        /// none. Two conditions have to hold before the cached value may be used - the weak target must
-        /// still be alive, and it must pass Unity's null check. The second is not redundant: a
-        /// Destroy()d component keeps a live managed shell, which the weak reference would hand back
-        /// while <c>cached != null</c> is false, so this is the path that re-resolves after a rig is torn
-        /// down and rebuilt. A Character with no AnimatedMouth at all is not cached as a negative - the
-        /// reference stays null and every frame re-runs GetComponent, exactly as the original does - but
-        /// that case never reaches the loop, because the pre-validation pass defers the whole frame to
-        /// the untouched method when any candidate resolves to null.
-        /// </summary>
         private static AnimatedMouth ResolveMouth(
             ConditionalWeakTable<Character, MouthEntry> mouths,
             Character candidate)
@@ -414,8 +316,6 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
             if (reference != null && reference.TryGetTarget(out AnimatedMouth cached) && cached != null)
                 return cached;
 
-            // Missing, Unity-destroyed, or (in principle) collected component: re-resolve exactly like
-            // the original would.
             AnimatedMouth resolved = candidate.GetComponent<AnimatedMouth>();
             if (resolved == null)
                 return null;

@@ -6,26 +6,19 @@ using PeakSafeOptimizer.Config;
 namespace PeakSafeOptimizer.Infrastructure
 {
     /// <summary>
-    /// How much of a patch's correctness rests on something structural validation cannot see. This is
-    /// a reported risk class, not an install gate: what decides whether a patch installs is its own
-    /// Initialize/ResolveTarget assertions. The level tells a reader of the startup log how much to
-    /// distrust a patch that installed successfully on a build nobody has re-audited.
-    ///
-    /// Ordered by how much re-auditing a new game build deserves: Structural &lt; Fingerprint &lt; StrictIl.
+    /// How much of a patch's correctness rests on something structural validation cannot see. A
+    /// reported risk class, not an install gate: what decides whether a patch installs is its own
+    /// Initialize/ResolveTarget assertions. Ordered by how much re-auditing a new game build deserves,
+    /// Structural &lt; Fingerprint &lt; StrictIl.
     /// </summary>
     public enum CompatibilityLevel
     {
-        /// <summary>
-        /// Everything the patch depends on is a member shape that Initialize verifies: simple
-        /// FieldRef/accessor patches and null guards. Structural validation is genuinely sufficient
-        /// here, so an unknown build needs no special attention for these.
-        /// </summary>
+        /// <summary>Everything the patch depends on is a member shape Initialize verifies.</summary>
         Structural,
 
         /// <summary>
-        /// Full-replacement Prefixes (Prefix returns bool and can skip the original). Matching member
-        /// shapes are not by themselves proof that the replacement is still equivalent, so these are
-        /// the patches to re-read against a fresh decompile after a game update.
+        /// Full-replacement Prefixes. Matching member shapes do not prove the replacement is still
+        /// equivalent, so these are the patches to re-read after a game update.
         /// </summary>
         Fingerprint,
 
@@ -39,12 +32,11 @@ namespace PeakSafeOptimizer.Infrastructure
     public sealed class PatchDefinition
     {
         /// <summary>
-        /// Overload used by every patch module. <c>requireCurrentMvid</c> no longer gates anything -
-        /// it only classifies: a Transpiler maps to <see cref="CompatibilityLevel.StrictIl"/>, true maps
-        /// to <see cref="CompatibilityLevel.Fingerprint"/> (a full replacement, worth re-reading after a
-        /// game update), false to <see cref="CompatibilityLevel.Structural"/>. The name is kept so that
-        /// forty call sites do not have to change; <see cref="RequiresCertifiedBuild"/> documents why it
-        /// no longer means what it says.
+        /// Overload used by every patch module. <paramref name="requireCurrentMvid"/> no longer gates
+        /// anything, it only classifies: a Transpiler maps to <see cref="CompatibilityLevel.StrictIl"/>,
+        /// true to <see cref="CompatibilityLevel.Fingerprint"/>, false to
+        /// <see cref="CompatibilityLevel.Structural"/>. The name is kept so the call sites do not have
+        /// to change.
         /// </summary>
         public PatchDefinition(
             PatchId id,
@@ -71,10 +63,8 @@ namespace PeakSafeOptimizer.Infrastructure
         }
 
         /// <summary>
-        /// Preferred constructor. <paramref name="compatibility"/> is mandatory so that this overload
-        /// can never be ambiguous with the legacy one, and <paramref name="reset"/> is invoked by
-        /// <see cref="PatchInstaller"/> only after every Harmony method of this patch has been
-        /// removed successfully.
+        /// Preferred constructor. <paramref name="compatibility"/> is mandatory so this overload can
+        /// never be ambiguous with the legacy one.
         /// </summary>
         public PatchDefinition(
             PatchId id,
@@ -112,18 +102,15 @@ namespace PeakSafeOptimizer.Infrastructure
         public CompatibilityLevel Compatibility { get; }
 
         /// <summary>
-        /// True when this patch replaces audited behavior. Retained for reporting and for any future
-        /// method-level behavioral fingerprint; it is deliberately *not* consulted by the installer.
-        /// It used to short-circuit installation on any build whose MVID was not the audited one, and
-        /// since nearly every module set it, one game update disabled nearly the whole plugin without
-        /// a single patch getting to check whether the members it reads had actually changed. See the
-        /// comment at the corresponding point in PatchInstaller.InstallOne.
+        /// Reported only, deliberately not consulted by the installer: it used to short-circuit
+        /// installation on an unknown build and nearly every module set it. See the comment at the
+        /// corresponding point in PatchInstaller.InstallOne.
         /// </summary>
         public bool RequiresCertifiedBuild { get; }
 
         /// <summary>
-        /// Optional cleanup for the patch's cached accessors. Called by the installer after a fully
-        /// successful uninstall only, never while any of this patch's Harmony methods are still live.
+        /// Cleanup for the patch's cached accessors. Called after a fully successful uninstall only,
+        /// never while any of this patch's Harmony methods are still live.
         /// </summary>
         public Action Reset { get; }
 

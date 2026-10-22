@@ -1,5 +1,99 @@
 # Changelog
 
+## 1.5.0
+
+Game 2.6.b (`Assembly-CSharp` MVID `60e20675-...`). Scoping the update by hash-diffing the two
+decompiled trees: 23 of 24,489 source files differ, all in `Assembly-CSharp`, and not one type was
+added or removed. None of the 39 patch targets was among them, so the update itself needed no
+adaptation - the 1.4.1 build installed all 39 on 2.6.b unchanged.
+
+What this release contains is the result of a full re-audit of every patch against a fresh decompile
+and a fresh asset census, plus an optimisation hunt across the whole game. The audit found no crash
+and no wrong-pixel bug, but it did find four patches that had stopped earning their place, two real
+divergences, one cache that could go stale across level loads, and a set of missing structure
+assertions.
+
+### Four patches deleted
+
+A patch that cannot pay for its own Harmony wrapper is a liability, and three of these could not.
+
+`DetailBodypartThrottle` only ever skipped the 59 "detail" body part types - subdivided fingers,
+jiggle bones, toes, mouth and jaw. A census of the shipped assets shows 472 body part instances using
+exactly 18 part types, all core ones: no finger, jiggle, toe or jaw part exists in the game at all, so
+the patch never skipped anything.
+
+`TumbleWeedTargetScan` re-solved a tumbleweed's chase target every fifth physics tick. The whole
+shipped game contains exactly one tumbleweed prefab, no code spawns it, and the saving was one angle
+plus one distance compare per tick. It was also the only remaining patch that deliberately traded
+behaviour (up to 0.1s of target lag) for that.
+
+`ItemScaleRedundantWrite` targeted `ItemScaleSyncer.Update`, and `ItemScaleSyncer` is attached to
+exactly one prefab in the game (the snowball). Nothing adds it at runtime.
+
+`RemoteItemInterpolationThreshold` skipped the remote ground-item interpolation only when the
+interpolated target was bitwise equal to the body's position. Vanilla moves the body half the
+remaining error per physics step, so it converges geometrically and never lands bitwise on the
+target: the skip was unreachable in steady state, and every remote item paid the gate chain twice.
+
+### Two patches added
+
+`ItemPromptDuplicateRefresh` and `InventoryNameTextRefresh`, both in the scale lane and both
+equivalence-proven. The first drops a per-frame item-prompt refresh that the same frame repeats
+unconditionally a few lines later; the second drops a per-frame inventory name rebuild whose only
+effect is writing back the string that is already in the label. Together they remove about 13
+allocations and 16 dictionary lookups per frame. The second one records the string reference the
+original wrote and only skips while that reference is still the live label, so a third-party mod that
+writes its own text forces a real refresh.
+
+### Fixes
+
+`LightVolumeSampleCache` keyed its lightmap cache generation on `(Texture3D instance id,
+Texture.updateCount)`. Every pixel install in the game destroys the old `Texture3D` and immediately
+creates a new one, so `updateCount` is always 1 and the key degenerated to the instance id - which
+Unity may recycle after a destroy, and that is exactly the pattern here. A level change could then
+serve the previous level's lightmap alpha forever. The generation is now the texture reference itself,
+which also removes two native reads from every sample.
+
+`AnimatedMouthMaterial` read the push-to-talk setting before vanilla's `character.IsLocal` short
+circuit and without vanilla's aliveness test. Remote mouths therefore paid an extra field read and
+delegate call every frame, and a null setting threw on mouths vanilla never touches. It now evaluates
+exactly where vanilla does.
+
+`RopeSegmentGuard` skipped the frame on a rope with no climbing API or no segments, but vanilla writes
+`ropeClimbWorldNormal = ropeClimbNormal` before it throws on either. The guard now lands that write
+before deferring, so the skipped frame leaves the same state vanilla leaves.
+
+`CollisionContactsNoAlloc` and the two Snowball contact guards are only worth anything while
+`Physics.reuseCollisionCallbacks` is on: with it off, `Collision` already preallocates its contact
+array and the guards guard a bug that cannot happen. All three are now inert unless that lane is
+active, so turning the lane off costs nothing instead of paying for three Harmony wrappers.
+
+`BodypartDragIdentity` compared a character reference with Unity's null operator on a path where
+vanilla only reads managed fields, paying a native liveness check per body part per physics step.
+
+Missing structure assertions were added to `Campfire` (the `transform` property and the target's
+parameter name), `BodypartMovementForceIdentity` (`mass`, `isKinematic`), `RemoteRagdollLodAnimator`
+(`CharacterRefs.hip`), `SleepingZombieScan` (`Bodypart.transform`) and `WeightRefreshCoalescing`
+(`Ascents.etcDamageMultiplier`). `RemoteRagdollLod` lost a dead overload, and
+`WeightRefreshCoalescing` lost a condition that was provably always false.
+
+### Every patch is on by default
+
+A default install should be the configuration that was actually validated. The full surface - all 37
+patches plus both engine-level lanes, `Experimental.CollisionCallbackReuse` and
+`Graphics.CapBoneWeights` - has been played for many sessions on 1.4.1 without a visible problem, so
+1.5.0 ships with everything enabled and every switch still independent. The startup line is now
+`registered=37, enabled=37, applied=37, skipped=0`.
+
+### The comments are the code's
+
+The repository had accumulated several thousand lines of commentary that narrated code, re-told the
+history of each fix and cited line numbers that no longer existed. It was also where stale claims hid:
+this pass found docstrings asserting that the current build had changed a method that is byte-identical
+to the previous one. All of it was cut back to the load-bearing minimum - invariants, vanilla ordering
+constraints, null-semantics choices, and the one sentence per patch that says why it is equivalent.
+About 5,400 lines of commentary are gone; the code is unchanged by that pass.
+
 ## 1.4.1
 
 The game shipped another update (Assembly-CSharp MVID `c88cc526-…` -> `e053d265-…`). Only

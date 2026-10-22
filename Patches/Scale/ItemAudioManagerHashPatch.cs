@@ -9,21 +9,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Full equivalent replacement of ItemAudioManager.Update() (audited source
-    /// ItemAudioManager.cs:26-101). Three strictly-equivalent reductions:
-    ///   1. The name-based animator.SetBool(name, ...) / GetBool(name) calls are replaced with the
-    ///      cached int-hash overloads (Animator.StringToHash). Unity documents that the name and
-    ///      hash overloads are interchangeable. The five literal names are hashed once during
-    ///      Initialize; the dynamic prevUse/useAnimation names are hashed through a
-    ///      ConditionalWeakTable keyed by the string so the key is never strongly held.
-    ///   2. SetBool is skipped when GetBool already reports the target value (SetBool is idempotent,
-    ///      so this is a no-op elimination).
-    ///   3. throwCharge.volume/pitch writes are skipped once the value has converged to its Lerp
-    ///      target (Lerp(target, target, t) == target, so the write is a no-op).
-    ///
-    /// Animator and AudioSource live in UnityEngine.AnimationModule / AudioModule, which this
-    /// project does not reference, so their members are reached through accessors emitted once
-    /// during Initialize.
+    /// Full replacement of ItemAudioManager.Update. The five animator parameters are pre-hashed with
+    /// Animator.StringToHash, the documented id the string overloads take, and the dynamic prevUse and
+    /// useAnimation names go through a ConditionalWeakTable so no item name is pinned. SetBool is
+    /// skipped when GetBool already reports the target, a no-op because Animator.SetBool is idempotent.
     /// </summary>
     internal static class ItemAudioManagerHashPatch
     {
@@ -85,7 +74,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             ScaleValidation.RequireInstanceMethod(
                 typeof(SFX_Instance), "Play", typeof(void), new[] { typeof(Vector3) }, true);
 
-            // Animator members.
             Type animatorType = animatorField.FieldType;
             MethodInfo stringToHash = animatorType.GetMethod(
                 "StringToHash", BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
@@ -100,7 +88,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (getBool == null || getBool.ReturnType != typeof(bool) || getBool.IsStatic)
                 throw new MissingMethodException("UnityEngine.Animator", "GetBool(int)");
 
-            // AudioSource members.
             Type audioSourceType = throwChargeField.FieldType;
             PropertyInfo volumeProperty = audioSourceType.GetProperty(
                 "volume", BindingFlags.Instance | BindingFlags.Public);
@@ -252,13 +239,11 @@ namespace PeakSafeOptimizer.Patches.Scale
             int antidoteHash = _antidoteHash;
             int consumedItemHash = _consumedItemHash;
 
-            // ItemAudioManager.cs:28-31
             if (getBool(animator, eatHash)) setBool(animator, eatHash, false);
             if (getBool(animator, healHash)) setBool(animator, healHash, false);
             if (getBool(animator, drinkHash)) setBool(animator, drinkHash, false);
             if (getBool(animator, antidoteHash)) setBool(animator, antidoteHash, false);
 
-            // ItemAudioManager.cs:32-33
             float dt = Time.deltaTime;
             float volume = getVolume(throwCharge);
             float newVolume = Mathf.Lerp(volume, 0f, dt * 5f);
@@ -273,7 +258,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             if (hasPrevUse)
                 prevUseHash = GetStringHash(hashCache, stringToHash, prevUse);
 
-            // ItemAudioManager.cs:34-37 (IsNullOrEmpty here is string.IsNullOrEmpty).
             if (hasPrevUse)
             {
                 if (getBool(animator, prevUseHash)) setBool(animator, prevUseHash, false);
@@ -281,13 +265,11 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             Item currentItem = character.data.currentItem;
 
-            // ItemAudioManager.cs:38-41
             if (!currentItem && hasPrevUse)
             {
                 if (getBool(animator, prevUseHash)) setBool(animator, prevUseHash, false);
             }
 
-            // ItemAudioManager.cs:42-49
             if (getBool(animator, consumedItemHash))
             {
                 __instance.finishTimer -= dt;
@@ -297,16 +279,13 @@ namespace PeakSafeOptimizer.Patches.Scale
                 __instance.finishTimer = 0.25f;
             }
 
-            // ItemAudioManager.cs:50-53
             if (__instance.finishTimer <= 0f)
             {
                 if (getBool(animator, consumedItemHash)) setBool(animator, consumedItemHash, false);
             }
 
-            // ItemAudioManager.cs:54
             if (currentItem)
             {
-                // ItemAudioManager.cs:56-60
                 float throwChargeLevel = character.refs.items.throwChargeLevel;
                 if (throwChargeLevel > 0f)
                 {
@@ -321,7 +300,6 @@ namespace PeakSafeOptimizer.Patches.Scale
 
                 Item prevItem = prevItemRef(__instance);
 
-                // ItemAudioManager.cs:61-67
                 if (prevItem != currentItem)
                 {
                     SFX_Instance[] switchGeneric = __instance.switchGeneric;
@@ -331,10 +309,8 @@ namespace PeakSafeOptimizer.Patches.Scale
                     }
                 }
 
-                // ItemAudioManager.cs:68-91
                 if (currentItem.TryGetComponent<ItemUseFeedback>(out ItemUseFeedback component))
                 {
-                    // ItemAudioManager.cs:70-77
                     if (prevItem != currentItem)
                     {
                         SFX_Instance[] equip = component.equip;
@@ -344,7 +320,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                         }
                     }
 
-                    // ItemAudioManager.cs:78-89
                     string useAnimation = component.useAnimation;
                     if (!string.IsNullOrEmpty(useAnimation))
                     {
@@ -354,12 +329,10 @@ namespace PeakSafeOptimizer.Patches.Scale
                             setBool(animator, useHash, usePrimary);
                     }
 
-                    // ItemAudioManager.cs:90
                     prevUseRef(__instance) = useAnimation;
                 }
             }
 
-            // ItemAudioManager.cs:93-99
             if (prevItemRef(__instance) && !currentItem)
             {
                 SFX_Instance[] switchGeneric = __instance.switchGeneric;
@@ -369,7 +342,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 }
             }
 
-            // ItemAudioManager.cs:100
             prevItemRef(__instance) = currentItem;
 
             return false;

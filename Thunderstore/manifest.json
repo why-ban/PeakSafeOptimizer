@@ -1,8 +1,8 @@
 {
     "name": "PeakSafeOptimizer",
-    "version_number": "1.4.1",
+    "version_number": "1.5.0",
     "website_url": "",
-    "description": "Performance mod focused on 8-player lobbies. 33 of 39 patches on by default, each equivalence-proven or a vanilla crash fix, per-patch fail-closed validation, opt-in switches for the ones that trade fidelity for frames.",
+    "description": "Performance mod for PEAK. 37 patches, all on by default: equivalence-proven rewrites or vanilla crash fixes, each with fail-closed member validation, plus a switch for every one.",
     "dependencies": [
         "BepInEx-BepInExPack_PEAK-5.4.75301"
     ]

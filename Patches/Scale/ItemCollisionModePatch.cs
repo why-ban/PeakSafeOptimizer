@@ -5,15 +5,9 @@ using PeakSafeOptimizer.Diagnostics;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Redundant-write filter for Item.UpdateCollisionDetectionMode() (audited source
-    /// Item.cs:537-547, called every Update from Item.cs:534). The target value is still derived
-    /// solely from itemState exactly as the original does:
-    /// Ground -> ContinuousDynamic, everything else -> Discrete.
-    /// Only the assignment is skipped when the Rigidbody already holds that value.
-    ///
-    /// UnityEngine.PhysicsModule is deliberately not referenced by this project, so the Rigidbody
-    /// field and its collisionDetectionMode property are reached through accessors emitted once
-    /// during Initialize; the enum is handled as its int backing value.
+    /// Redundant-write filter for Item.UpdateCollisionDetectionMode. The target is still derived from
+    /// itemState exactly as vanilla does, Ground to ContinuousDynamic and everything else to Discrete;
+    /// only the assignment is skipped when the Rigidbody already holds that value.
     /// </summary>
     internal static class ItemCollisionModePatch
     {
@@ -94,8 +88,7 @@ namespace PeakSafeOptimizer.Patches.Scale
 
             if (getRig(__instance) == null)
             {
-                // Includes destroyed Rigidbody: let the original method run and surface the same
-                // behavior the game would have on its own.
+                // Also catches a destroyed Rigidbody, which vanilla would throw on
                 RateLimitedDiagnostics.Hit("ItemCollisionMode.rig-null");
                 return true;
             }

@@ -2,9 +2,7 @@
 
 A performance mod for PEAK aimed at the case that actually hurts: **a full lobby standing in one place**.
 
-Most of what it does is invisible. 33 of its 39 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. Anything that trades appearance, feel or animation fidelity for frames is **off by default**, because that trade is yours to make, not the mod's.
-
-That default-on rule has exactly two declared exceptions, both on by default and both explained below: `Experimental.ExplosionScale` (fewer and, in a pile-up, smaller explosion orbs, and a correspondingly softer camera shake) and `Experimental.TumbleWeedTargetScan` (a tumbleweed re-picks *which* character it chases once every 5 physics ticks, 0.1s, instead of every tick; the force and the steering towards the character it already chose are unchanged, and tumbleweeds only exist in the desert / mesa biome).
+Most of what it does is invisible. Most of its 37 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. A handful trade a little appearance or animation fidelity for frames; those are called out under the switches below. **Every patch is on by default**, so a fresh install is already the configuration this release was audited and played in.
 
 There are no numbers to tune. Every threshold is a constant in the code, next to the reasoning that picked it.
 
@@ -18,28 +16,26 @@ Works in multiplayer with vanilla players and with players who do not have the m
 
 ## What it actually does
 
-**Removes per-frame exception floods.** PEAK throws a few `NullReferenceException`s every single frame in situations that are easy to hit (rope climbing with an empty segment list, an incomplete local character while the emote wheel is up, hand IK during an item swap, pocket items during the join window, two unguarded singletons while binoculars are raised). An exception per frame is not free. Seven guards cut those to zero - each one skips exactly the frame whose data is missing and defers to the untouched original otherwise, and each one mirrors the short circuits in the original so it never skips a frame vanilla would have survived. Those seven are independent switches, all in the stability lane. Measured in one session: 2315 + 1544 + 184 + 135 + 67 exceptions. Those counts predate the current guards and the emote-wheel figure in particular has not been re-measured against them, so treat them as the order of magnitude rather than the exact win. The binocular one alone was 1544 - one per frame for as long as anyone held the binoculars up, each costing a throw, a stack capture and a synchronous log write on the main thread.
+**Removes per-frame exception floods.** PEAK throws a few `NullReferenceException`s every single frame in situations that are easy to hit (rope climbing with an empty segment list, an incomplete local character while the emote wheel is up, hand IK during an item swap, two unguarded singletons while binoculars are raised). An exception per frame is not free. Seven guards cut those to zero - each one skips exactly the frame whose data is missing and defers to the untouched original otherwise, and each one mirrors the short circuits in the original so it never skips a frame vanilla would have survived. Those seven are independent switches, all in the stability lane. Measured in one session: 2315 + 1544 + 184 + 135 + 67 exceptions. Those counts predate the current guards and the emote-wheel figure in particular has not been re-measured against them, so treat them as the order of magnitude rather than the exact win. The binocular one alone was 1544 - one per frame for as long as anyone held the binoculars up, each costing a throw, a stack capture and a synchronous log write on the main thread.
 
 **Cuts redundant native calls.** A large part of the per-frame cost in a multiplayer lobby is the game writing values that are already what it is about to write, or recomputing something it computed a moment ago. Examples: `Bodypart.Drag` multiplies two velocity vectors by exactly `1f` for every bodypart of every ragdolled character, 50 times a second; `Bodypart.AddMovementForce` adds the zero vector for everyone who is not pressing a movement key; the `LightVolume` lightmap is sampled per character per frame for voice occlusion when clustered players share the same voxel. These are skipped only when the skip is provably an identity.
 
 **Replaces scans and lookups with cheaper equivalents.** Squared distances instead of square roots, string Animator parameters hashed once instead of per frame, a dictionary instead of a linear search, one full player scan instead of two in the same frame.
 
-**Reduces garbage.** `CharacterMovement.OnCollision` evaluated the allocating `Collision.contacts` property six times per contact; it now reads contact zero once. Optionally (see below) the engine can be told to stop allocating a `Collision` object plus a `ContactPoint[]` for every reported collision at all.
+**Reduces garbage.** `CharacterMovement.OnCollision` evaluated the allocating `Collision.contacts` property six times per contact; it now reads contact zero once. The engine is also told to stop allocating a `Collision` object per reported collision at all - see the switches below.
 
 **Scales down explosions.** Vanilla spawns 10 orbs per dynamite explosion, each an animated transparent sphere roughly twelve metres across. This caps a single explosion at 5 orbs at its authored size, and when explosions pile up in the same place it drops the count to 2 and shrinks the orbs to 60%. With ten sticks detonating inside one metre the frame is spent filling the screen several times over rather than on spawning orbs, so the count reduction alone barely moved it - the shrink is there for the fill, though how the cost splits between the orb mesh and the two particle systems each orb also carries has not been measured. A clustered explosion therefore looks smaller per orb, but you are seeing the union of many of them, so the fireball stays wider than any single blast. A lone explosion is not shrunk at all. Two things follow that are worth knowing: fewer orbs also means a softer camera shake, because each orb fires two screen shakes and the game stacks them; and this only covers dynamite - the rocket, rocket-pack and ghost-ball explosions are different prefabs whose cost is in particle systems, and they are untouched. Damage, knockback and blast radius are unaffected either way - those live in a separate component.
 
-**Cheapens the swamp spore volumes.** Every poison-gas volume in the level runs its proximity check every frame with no distance gate of its own - two to four square roots and two to four ragdoll dictionary lookups each, plus a string-keyed dictionary hash while you stand in one. The replacement resolves your position and its distance once per volume and reuses both, and replaces the overlap-priority lookup with a single dictionary probe. The distance is still a real square root, because a squared comparison is not exact at the boundary and the boundary is a damage tick. The damage itself is reproduced line for line. Note this is CPU only: the clouds themselves are authored particle systems, and whether they are covered by the game's own particle culler is a per-prefab fact this mod cannot see.
+## Switches that trade fidelity for frames
 
-## Optional switches
-
-All off by default. Turn them on if you want the frames more than the fidelity.
+On by default, like everything else. Turn them off if you would rather keep the fidelity.
 
 | Switch | What you gain | What it costs |
 |---|---|---|
+| `Experimental.ExplosionScale` | A single dynamite explosion spawns 5 orbs instead of 10; piled-up explosions drop to 2 and shrink the orbs to 60% | A smaller-looking blast per orb and a softer camera shake, because each orb also fires two screen shakes that the game stacks. Damage, knockback and radius are untouched - they live in a separate component |
 | `Experimental.RemoteClusterAnimationThrottle` | Remote players evaluate their animation graph every other physics tick instead of every tick - roughly halves the single most expensive managed per-character cost in a cluster | Remote animation steps at 25Hz. Speed is unchanged (the accumulated delta time is passed through), but the stepping is noticeable up close |
-| `Experimental.DetailBodypartThrottle` | Fingers, jiggle bones, toes and jaw of remote players animate at ~16Hz | Those parts lag slightly. Spine, limbs and held items are untouched |
 | `Experimental.RemoteRagdollLod` | Remote players past 60m stop evaluating animation entirely and become passive ragdolls carried by physics and the network | A distant player's pose freezes. Distance is measured from whoever you are watching, so spectating does not freeze the lobby around you. One switch covers four patches that are only coherent together, and they are installed as a unit |
-| `Experimental.CollisionCallbackReuse` | The engine stops allocating a `Collision` object and a `ContactPoint[]` for every reported collision - the largest single source of collision garbage in a cluster | A process-wide engine flag. The game side is fully audited (exactly one place keeps a collision across frames, and it is guarded), but the game also hands the live collision to mods through two public delegates, so another mod that holds one past its callback would start reading a reused instance |
+| `Experimental.CollisionCallbackReuse` | The engine stops allocating a `Collision` object per reported collision - the largest single source of collision garbage in a cluster | A process-wide engine flag. The game side is fully audited (exactly one place keeps a collision across frames, and it is guarded), but the game also hands the live collision to mods through two public delegates, so another mod that holds one past its callback would start reading a reused instance |
 | `Graphics.CapBoneWeights` | Two bones per vertex instead of four or unlimited - a per-vertex cost of every character on screen, and the game offers no setting for it | Joint deformation at shoulders and hips is a little coarser |
 
 Every switch hot-reloads: change it in a config manager and it installs or uninstalls immediately, no restart. A switch that covers several patches is installed all-or-nothing - if one member cannot install on your build, the others are withdrawn and the log says which and why. The two engine-level lanes restore what they found when switched off, on any patch toggle, and on game exit, and only while the value they wrote is still the live one, so another mod that changed it afterwards keeps its own value.
@@ -50,7 +46,7 @@ Every switch hot-reloads: change it in a config manager and it installs or unins
 
 **It contains no Transpiler.** Every patch is a Prefix or Postfix with an exact structure check. IL rewriting is fragile in a heavily modded environment, and the one Transpiler that survived testing was dropped before release rather than shipped.
 
-**It does not touch networking.** No Photon serialization rate, no RPC, no interpolation of remote positions. Two patches whose target is an RPC entry point are held to the strictest validation tier.
+**It does not touch networking.** No Photon serialization rate, no RPC, no interpolation of remote positions. The one patch whose target is an RPC entry point is held to the strictest validation tier.
 
 **It does not fix other mods.** Faults caused by other mods are out of scope.
 
@@ -68,16 +64,16 @@ Filter `BepInEx/LogOutput.log` for `PeakSafeOptimizer`. You should see:
 
 ```
 PeakSafeOptimizer | compatibility mode: certified
-PeakSafeOptimizer | totals: registered=39, enabled=33, applied=33, skipped=6, failed=0, module-failures=0
+PeakSafeOptimizer | totals: registered=37, enabled=37, applied=37, skipped=0, failed=0, module-failures=0
 ```
 
-`applied` should equal `enabled`. The six skipped lines are the default-off switches. `failed=0` and `module-failures=0` mean no patch hit a problem.
+`applied` should equal `enabled`, and with a default config both are 37. A lower `enabled` means you turned a switch off. `failed=0` and `module-failures=0` mean no patch hit a problem.
 
 `compatibility mode: structural-validation` instead of `certified` just means the running game build is not the one this release was last audited against. Every patch still validates and installs on its own merits; the label tells you to start re-reading from the `Fingerprint` and `StrictIl` entries.
 
 ## If something goes wrong
 
-Turn off the last switch you enabled. If you enabled nothing, the likely candidates in order are `Experimental.CollisionCallbackReuse` (if on), then any of the throttles (if on), then the two on-by-default non-equivalent switches, `Experimental.ExplosionScale` and `Experimental.TumbleWeedTargetScan`. Every switch is independent.
+Turn off the last switch you enabled. If you enabled nothing, the likely candidates in order are the two engine-level lanes, `Experimental.CollisionCallbackReuse` and `Graphics.CapBoneWeights`, then any of the throttles, then `Experimental.ExplosionScale`. Every switch is independent.
 
 `Diagnostics.DetailedLogging` is on by default. It logs a line the first time each repair reason is hit and then at most once every 30 seconds per reason - it never spams per frame, and it only counts repairs and fallbacks, never the normal optimized path. Those lines are the fastest way to tell which guard is doing something.
 

@@ -8,21 +8,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Equivalent replacement of MushroomZombie.ReadyToDisable() (audited source
-    /// MushroomZombie.cs:935-964). ZombieManager.Update (ZombieManager.cs:35-63) calls this for
-    /// every registered zombie every frame, but only on the master client (IsMasterClient early exit
-    /// at ZombieManager.cs:37-40), so the host pays players x zombies distance calls per frame.
-    ///
-    /// Two changes, both provably equivalent:
-    /// 1. Squared distance. Both thresholds are positive (100f and distanceToEnable + 5f), and the
-    ///    original comparisons are non-strict `num &lt;= threshold`; for non-negative distance and
-    ///    positive threshold, d &lt;= t is exactly d*d &lt;= t*t. A non-positive
-    ///    distanceToEnable + 5f is handled by falling back to the original method.
-    /// 2. Early break once both flags are set. The remaining iterations of the original loop can
-    ///    only write `true` into flags that are already `true`, so the loop body has no other
-    ///    observable effect and stopping early is equivalent.
-    ///
-    /// The dead-state early return and the final state checks are preserved verbatim.
+    /// Equivalent replacement of MushroomZombie.ReadyToDisable. Squared distances are exact because
+    /// both thresholds are positive and the comparisons are non-strict; a non-positive
+    /// distanceToEnable + 5 falls back to the original. The loop stops once both flags are set, which
+    /// only skips writes of true into flags already true.
     /// </summary>
     internal static class ZombieDisableScanPatch
     {
@@ -89,7 +78,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
-            // MushroomZombie.cs:937-940, unchanged.
             if (__instance.currentState == MushroomZombie.State.Dead &&
                 timeDiedAtRef(__instance) + 10f < Time.time)
             {
@@ -108,7 +96,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             float nearThreshold = __instance.distanceToEnable + 5f;
             if (!(nearThreshold > 0f))
             {
-                // Squaring would not preserve the original comparison; defer.
                 RateLimitedDiagnostics.Hit("ZombieDisableScan.non-positive-threshold-fallback");
                 return true;
             }
@@ -136,7 +123,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                     break;
             }
 
-            // MushroomZombie.cs:955-963, unchanged.
             if (!far)
             {
                 __result = true;

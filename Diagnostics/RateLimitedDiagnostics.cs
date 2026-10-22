@@ -34,20 +34,18 @@ namespace PeakSafeOptimizer.Diagnostics
             long count = Interlocked.Increment(ref state.Count);
             if (count == 1)
             {
-                // First hit is always reported; only this path needs a timestamp baseline.
+                // First hit is always reported, only this path needs a timestamp baseline
                 long firstTicks = DateTime.UtcNow.Ticks;
                 Interlocked.Exchange(ref state.LastLogTicks, firstTicks);
                 Interlocked.Exchange(ref state.LastLoggedCount, 1);
                 _log?.LogInfo($"Repair reason '{reason}' first hit");
                 return;
             }
-            // Two steady states. With DetailedLogging on - which is the default (OptimizerConfig.cs:370
-            // binds it to true) and what the test machines run - every hit past the first also pays a
-            // DateTime.UtcNow read, an Interlocked.Read and a subtraction before deciding to say
-            // nothing; only the 30 s winner formats or allocates. With it off, a hit is a dictionary
-            // lookup plus an Interlocked.Increment and nothing else. Either way GetOrAdd's factory is a
-            // non-capturing lambda, which Roslyn caches in a static field, so it allocates no closure
-            // and no delegate per call - do not turn it into a capturing one.
+            // Two steady states. With DetailedLogging off a hit is a dictionary lookup plus an
+            // Interlocked increment and nothing else; with it on, every hit past the first also pays a
+            // DateTime read and a compare, and only the 30s winner formats or allocates. GetOrAdd's
+            // factory is a non-capturing lambda that Roslyn caches in a static field, so do not turn it
+            // into a capturing one
             if (!(_detailed?.Value ?? false))
                 return;
 

@@ -8,24 +8,10 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Makes Snowball independent of the lifetime of a UnityEngine.Collision instance, which is the
-    /// one prerequisite for turning on <c>Physics.reuseCollisionCallbacks</c>.
-    ///
-    /// Snowball is the only place in the whole game assembly that keeps a Collision reference past
-    /// its callback: <c>private Collision _unprocessedContact</c> (Snowball.cs:105) is assigned in
-    /// OnCollisionStay (:227) and read in the next Update through ProcessLastCollision (:267-294) via
-    /// <c>.collider</c> (:273), <c>.contacts[0].normal</c> (:301) and <c>.gameObject</c> (:310).
-    /// With callback reuse enabled that reference would alias the single shared
-    /// <c>Physics.s_ReusableCollision</c>, whose header/pair are overwritten by every later contact
-    /// pair and whose contact pointer only stays valid for the duration of the dispatch.
-    ///
-    /// Two Prefixes, both full equivalent replacements of very short methods:
-    ///   <see cref="StayPrefix"/>   replaces OnCollisionStay (9 lines) and stores a value snapshot of
-    ///                              exactly the three members ProcessLastCollision reads.
-    ///   <see cref="ProcessPrefix"/> replaces ProcessLastCollision plus the Scale/ClassifyCurrentContact
-    ///                              helpers it drives, reading the snapshot instead of the Collision.
-    /// Every branch, comparison and field write is reproduced in original order, so with or without
-    /// callback reuse the observable behaviour is the vanilla one.
+    /// Snowball is the only place in the game that keeps a Collision past its callback, which with
+    /// Physics.reuseCollisionCallbacks on would alias the shared instance. StayPrefix snapshots the three
+    /// members ProcessLastCollision later reads and ProcessPrefix consumes them; a pair with no contact
+    /// points skips the growth vanilla throws on, and both are inert unless CollisionCallbackReuse.Active.
     /// </summary>
     internal static class SnowballContactPatch
     {
@@ -37,12 +23,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             Snowball
         }
 
-        /// <summary>
-        /// Value copy of the parts of the collision that survive the callback in vanilla. Captured
-        /// while the engine data is still valid, which is what makes callback reuse safe here.
-        /// Collider and GameObject are independent managed objects, so holding those references is
-        /// unaffected by reuse.
-        /// </summary>
         private sealed class Snapshot
         {
             internal Collider Collider;
@@ -77,7 +57,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             ResolveStayTarget();
             ResolveProcessTarget();
 
-            // Every member the two replacements read or write, verified exactly once here.
             FieldInfo unprocessedContact = ScaleValidation.RequireInstanceField(
                 typeof(Snowball), "_unprocessedContact", typeof(Collision));
             FieldInfo lastCollision = ScaleValidation.RequireInstanceField(
@@ -104,7 +83,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             ScaleValidation.RequireInstanceProperty(typeof(Snowball), "CanGrow", typeof(bool));
             ScaleValidation.RequireInstanceField(typeof(ItemScaleSyncer), "currentScale", typeof(float));
             ScaleValidation.RequireInstanceField(typeof(Item), "rig", typeof(Rigidbody));
-            // ItemComponent.item, i.e. inherited rather than declared on Snowball.
             ScaleValidation.RequireInstanceField(typeof(ItemComponent), "item", typeof(Item));
             ScaleValidation.RequireInstanceMethod(
                 typeof(Snowball), "Scale", typeof(void), new[] { typeof(float) }, false);
@@ -122,8 +100,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 AccessTools.FieldRefAccess<Snowball, int>(terrainLayer);
             AccessTools.FieldRef<Snowball, int> characterLayerRef =
                 AccessTools.FieldRefAccess<Snowball, int>(characterLayer);
-            // The private enum is int backed (verified by RequireContactTypeField), so it can be
-            // written through an int FieldRef without referencing the type.
             AccessTools.FieldRef<Snowball, int> lastContactTypeRef =
                 AccessTools.FieldRefAccess<Snowball, int>(lastContactType);
             AccessTools.FieldRef<Snowball, float> timeLastCollidedRef =
@@ -190,16 +166,11 @@ namespace PeakSafeOptimizer.Patches.Scale
             _updateMass = null;
         }
 
-        /// <summary>
-        /// Equivalent replacement of Snowball.OnCollisionStay (Snowball.cs:223-232). The vanilla
-        /// branch structure is preserved; the only difference is that the non-character branch stores
-        /// a value snapshot next to the original field write instead of relying on the field alone.
-        /// The field is still written so that anything else reading it - including the untouched
-        /// vanilla ProcessLastCollision if this pair of patches is only half installed - keeps seeing
-        /// the same non-null marker.
-        /// </summary>
         internal static bool StayPrefix(Snowball __instance, Collision other)
         {
+            if (!CollisionCallbackReuse.Active)
+                return true;
+
             AccessTools.FieldRef<Snowball, int> characterLayerRef = _characterLayer;
             AccessTools.FieldRef<Snowball, Collision> unprocessedRef = _unprocessedContact;
             AccessTools.FieldRef<Snowball, float> timeLastTouchedScoutRef = _timeLastTouchedScout;
@@ -227,9 +198,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 Snapshot snapshot = Snapshots.GetOrCreateValue(__instance);
                 snapshot.GameObject = gameObject;
                 snapshot.Collider = other.collider;
-                // contactCount can legitimately be 0 for a persisting pair, in which case vanilla
-                // would throw inside Scale(). Record the absence instead and reproduce the vanilla
-                // outcome (no growth) rather than the exception.
                 if (other.contactCount > 0)
                 {
                     snapshot.Normal = other.GetContact(0).normal;
@@ -247,7 +215,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             Item item = __instance.item;
             if (item == null)
             {
-                // The original dereferences item here; leave its behaviour with it.
                 RateLimitedDiagnostics.Hit("SnowballContactSnapshot.item-unavailable");
                 return true;
             }
@@ -256,14 +223,15 @@ namespace PeakSafeOptimizer.Patches.Scale
             return false;
         }
 
-        /// <summary>
-        /// Equivalent replacement of Snowball.ProcessLastCollision (Snowball.cs:267-294) inlining the
-        /// Scale() and ClassifyCurrentContact() helpers, which are the two places that dereference the
-        /// stored Collision. Only reached when a snapshot exists, so the vanilla path stays in charge
-        /// of any collision recorded before this patch was installed.
-        /// </summary>
         internal static bool ProcessPrefix(Snowball __instance)
         {
+            if (!CollisionCallbackReuse.Active)
+            {
+                if ((object)__instance != null)
+                    Snapshots.Remove(__instance);
+                return true;
+            }
+
             AccessTools.FieldRef<Snowball, Collision> unprocessedRef = _unprocessedContact;
             AccessTools.FieldRef<Snowball, Collider> lastCollisionRef = _lastCollision;
             AccessTools.FieldRef<Snowball, int> lastContactTypeRef = _lastContactType;
@@ -275,14 +243,11 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return true;
             }
 
-            // Vanilla's own early-out, evaluated on the same field.
             if (unprocessedRef(__instance) == null)
                 return false;
             if (!Snapshots.TryGetValue(__instance, out Snapshot snapshot) || snapshot == null ||
                 snapshot.GameObject == null)
             {
-                // No snapshot: this collision was captured by the untouched original, so let the
-                // untouched original consume it.
                 RateLimitedDiagnostics.Hit("SnowballContactConsume.snapshot-unavailable");
                 return true;
             }
@@ -305,13 +270,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             return false;
         }
 
-        /// <summary>
-        /// Snowball.CanGrow (Snowball.cs:115), which is a private expression-bodied property:
-        /// <c>item.rig.linearVelocity.magnitude &gt; minimumSpeedToGrow</c>. Inlined rather than
-        /// invoked, because it reads two public members plus one field this patch already resolves.
-        /// A missing rig would make the original throw; reporting "cannot grow" keeps the snowball
-        /// intact instead, which is the same outcome the caller sees for a slow-moving ball.
-        /// </summary>
         private static bool CanGrow(Snowball instance)
         {
             Item item = instance.item;
@@ -321,15 +279,11 @@ namespace PeakSafeOptimizer.Patches.Scale
             return rig.linearVelocity.magnitude > _minimumSpeedToGrow(instance);
         }
 
-        /// <summary>Snowball.Scale(1f) (Snowball.cs:296-306) reading the snapshot normal.</summary>
         private static void Grow(Snowball instance, Snapshot snapshot)
         {
             Vector3? previous = _previousPosition(instance);
             if (!previous.HasValue)
                 return;
-            // Vanilla dereferences _unprocessedContact.contacts[0] here, which throws when the pair
-            // reported no contact points. Without a normal there is nothing to project onto, so skip
-            // the growth for that tick instead of throwing.
             if (!snapshot.HasNormal)
             {
                 RateLimitedDiagnostics.Hit("SnowballContactConsume.no-contact-point");
@@ -346,9 +300,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             _updateMass(instance);
         }
 
-        /// <summary>
-        /// Snowball.ClassifyCurrentContact (Snowball.cs:308-325) reading the snapshot GameObject.
-        /// </summary>
         private static ContactType Classify(Snowball instance, Snapshot snapshot)
         {
             GameObject gameObject = snapshot.GameObject;
@@ -365,10 +316,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             return ContactType.Snowball;
         }
 
-        /// <summary>
-        /// Proves the private ContactType enum still has the audited int-backed shape and member
-        /// order, because the replacement writes the field as a plain int.
-        /// </summary>
         private static FieldInfo RequireContactTypeField()
         {
             FieldInfo field = typeof(Snowball).GetField(

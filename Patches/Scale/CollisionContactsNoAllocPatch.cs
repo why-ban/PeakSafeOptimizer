@@ -8,32 +8,12 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.Scale
 {
     /// <summary>
-    /// Full equivalent replacement of CharacterMovement.OnCollision(Collision, bool, Bodypart)
-    /// (audited source CharacterMovement.cs:923-957). The original evaluates the
-    /// <c>Collision.contacts</c> property six times (:928, :948, twice each at :953 and :955); this
-    /// version reads contact 0 exactly once through <c>Collision.GetContact(0)</c>.
-    ///
-    /// Why that is bit-identical: <c>GetContact</c> (Collision.cs:104-117) returns
-    /// <c>m_LegacyContacts[index]</c> whenever the array exists, and builds the same ContactPoint from
-    /// <c>m_Pair.GetContactPoint_Internal</c> otherwise - with the same flip logic
-    /// (<c>m_Flipped ? -1f : 1f</c> on the normal, swapped collider entity ids) that
-    /// <c>ContactPair.ExtractContactsArray</c> (ContactPair.cs:110-137) applies when filling the
-    /// array. So both accessors produce the same value for index 0 in either mode.
-    ///
-    /// Why it matters: with <c>Physics.reuseCollisionCallbacks</c> enabled the eager
-    /// <c>ContactPoint[]</c> allocation in the Collision constructor (Collision.cs:87-94) is gone and
-    /// <c>.contacts</c> becomes a lazy allocation per callback (Collision.cs:66-77). This bodypart
-    /// callback is by far the most frequent contact consumer in a clustered lobby, so removing its
-    /// <c>.contacts</c> use is what turns that lazy allocation into no allocation at all.
-    ///
-    /// Everything else is reproduced in original order: the CollisionModifier lookup and
-    /// Collide/standable/CanStand gate, the StandOnPlayer / StandableRig decision, the rocket RPC
-    /// branch, the AcceptableAngle test and both AddGroundSample calls with the same arguments.
-    /// StandOnPlayer, StandableRig, DoGroundChecks and AcceptableAngle are invoked through delegates
-    /// bound to the game's own methods, so other patches on them (CollisionCharacterLookup) keep
-    /// applying. The zero-contact edge case is the one intentional deviation: vanilla throws
-    /// IndexOutOfRangeException there, and this Prefix defers to the untouched original so that
-    /// behaviour - including the exception - stays with the game.
+    /// Full equivalent replacement of CharacterMovement.OnCollision(Collision, bool, Bodypart), inert
+    /// unless CollisionCallbackReuse.Active. Collision.GetContact(0) returns the same ContactPoint as
+    /// contacts[0] in either mode, so contact 0 is read once instead of six times, and with reuse off
+    /// the Collision constructor already allocates that array eagerly, which is why this is gated.
+    /// The StandOnPlayer, StandableRig, DoGroundChecks and AcceptableAngle calls stay bound through
+    /// delegates so patches on them keep applying. A zero-contact collision defers to the original.
     /// </summary>
     internal static class CollisionContactsNoAllocPatch
     {
@@ -66,11 +46,10 @@ namespace PeakSafeOptimizer.Patches.Scale
                 typeof(CharacterMovement), "DoGroundChecks", typeof(bool), Type.EmptyTypes, false);
             MethodInfo acceptableAngle = ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterMovement), "AcceptableAngle", typeof(bool), new[] { typeof(float) }, false);
-            // internal, so it is bound as a delegate rather than called directly.
+            // internal, so it is bound as a delegate rather than called directly
             MethodInfo canStand = ScaleValidation.RequireInstanceMethod(
                 typeof(CollisionModifier), "CanStand", typeof(bool), new[] { typeof(Character) }, false);
 
-            // Members the replacement calls directly, proven to still have the audited shape.
             ScaleValidation.RequireInstanceMethod(
                 typeof(CharacterMovement), "AddGroundSample", typeof(void),
                 new[] { typeof(CharacterMovement.PlayerGroundSample) }, true);
@@ -146,13 +125,12 @@ namespace PeakSafeOptimizer.Patches.Scale
             _canStand = null;
         }
 
-        /// <summary>
-        /// Hot path: once per reported bodypart contact, i.e. thousands per second in a cluster. No
-        /// diagnostics on the reachable branches for that reason.
-        /// </summary>
         internal static bool Prefix(
             CharacterMovement __instance, Collision collision, bool collisionEnter, Bodypart bodypart)
         {
+            if (!CollisionCallbackReuse.Active)
+                return true;
+
             AccessTools.FieldRef<CharacterMovement, Character> characterRef = _character;
             Func<CharacterMovement, Collision, bool> standOnPlayer = _standOnPlayer;
             Func<CharacterMovement, Rigidbody, bool> standableRig = _standableRig;
@@ -173,12 +151,9 @@ namespace PeakSafeOptimizer.Patches.Scale
             Collider collider = collision.collider;
             if (collider == null)
             {
-                // The original dereferences collision.collider unconditionally; keep its behaviour.
                 return true;
             }
 
-            // Vanilla would throw IndexOutOfRangeException on contacts[0] with no contact points.
-            // Leave that to the original rather than inventing a different outcome.
             if (collision.contactCount <= 0)
                 return true;
 
@@ -237,11 +212,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 throw new InvalidOperationException("CharacterMovement.RocketExplodeRPC is no longer a PunRPC");
         }
 
-        /// <summary>
-        /// PlayerGroundSample is a readonly struct with a primary constructor (point, normal) and an
-        /// IsValid field that is true for every constructed value (CharacterMovement.cs:13-23). The
-        /// replacement constructs it directly, so its shape has to be proven.
-        /// </summary>
         private static void RequireGroundSampleShape()
         {
             Type sample = typeof(CharacterMovement.PlayerGroundSample);
