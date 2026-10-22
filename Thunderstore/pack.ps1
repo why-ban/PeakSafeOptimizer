@@ -36,6 +36,30 @@ if ($dllVersion -ne "$version.0") {
     throw "Version mismatch: manifest says $version, assembly says $dllVersion"
 }
 
+# Plugin.cs carries the version BepInEx prints in the plugin list; FileVersion cannot see it.
+$pluginSource = Get-Content -LiteralPath (Join-Path $projectRoot 'Plugin.cs') -Raw
+if ($pluginSource -notmatch 'PluginVersion\s*=\s*"([^"]+)"') {
+    throw 'Plugin.cs has no PluginVersion literal'
+}
+if ($Matches[1] -ne $version) {
+    throw "Version mismatch: manifest says $version, Plugin.PluginVersion says $($Matches[1])"
+}
+
+# Thunderstore rejects the upload rather than the pack, so the two format rules are checked here.
+$iconPath = Join-Path $thunderstore 'icon.png'
+$icon = [System.IO.File]::ReadAllBytes($iconPath)
+if ($icon.Length -lt 24 -or $icon[0] -ne 0x89 -or $icon[1] -ne 0x50) {
+    throw 'icon.png is not a PNG'
+}
+$iconW = ([int]$icon[16] -shl 24) -bor ([int]$icon[17] -shl 16) -bor ([int]$icon[18] -shl 8) -bor [int]$icon[19]
+$iconH = ([int]$icon[20] -shl 24) -bor ([int]$icon[21] -shl 16) -bor ([int]$icon[22] -shl 8) -bor [int]$icon[23]
+if ($iconW -ne 256 -or $iconH -ne 256) {
+    throw "icon.png must be 256x256, is ${iconW}x${iconH}"
+}
+if ($manifest.description.Length -ge 250) {
+    throw "manifest description is $($manifest.description.Length) chars, must be under 250"
+}
+
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) 'PeakSafeOptimizer_pack'
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'plugins') | Out-Null

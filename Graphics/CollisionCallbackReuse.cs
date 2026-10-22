@@ -27,8 +27,9 @@ namespace PeakSafeOptimizer
     ///
     /// A shared bool carries no ownership token, so "is this still my write" is answered by comparing
     /// against the value this lane wrote: a mod that clears the flag while this lane holds it is
-    /// overwritten on the next patch toggle. The restore direction stays conservative, this lane never
-    /// writes false over someone else's true.
+    /// overwritten on the next patch toggle, and a mod that sets it to the same true this lane wrote is
+    /// indistinguishable from this lane, so the restore can clear that mod's intent. The comparison
+    /// only rules out writing back over a value this lane provably did not write.
     /// </summary>
     internal sealed class CollisionCallbackReuse
     {
@@ -83,11 +84,12 @@ namespace PeakSafeOptimizer
                     // the start of the second on rather than a value from before the first
                     _originalValue = Physics.reuseCollisionCallbacks;
                     _hasOriginalValue = true;
+                    // Guards first: they must never be inert while the engine is already reusing
+                    Active = true;
                     Physics.reuseCollisionCallbacks = true;
                     _wroteValue = true;
                     _wrote = true;
                     _applied = true;
-                    Active = true;
                     _log?.LogInfo(
                         "PeakSafeOptimizer | Physics.reuseCollisionCallbacks = true " +
                         $"(was {_originalValue}); the Snowball cross-frame collision reference is guarded.");
@@ -134,9 +136,11 @@ namespace PeakSafeOptimizer
         private void Restore(string reason)
         {
             _applied = false;
-            Active = false;
             if (!_hasOriginalValue)
+            {
+                Active = false;
                 return;
+            }
             try
             {
                 // Only undo this lane's own write, and only while it is still the live value: anything
@@ -144,11 +148,14 @@ namespace PeakSafeOptimizer
                 if (_wrote && Physics.reuseCollisionCallbacks == _wroteValue)
                 {
                     Physics.reuseCollisionCallbacks = _originalValue;
+                    // Only now is the engine back to not reusing, so only now may the guards go inert
+                    Active = false;
                     _log?.LogInfo(
                         $"PeakSafeOptimizer | Physics.reuseCollisionCallbacks restored to {_originalValue} ({reason}).");
                 }
                 else
                 {
+                    Active = false;
                     _log?.LogInfo(
                         "PeakSafeOptimizer | Physics.reuseCollisionCallbacks left as is " +
                         $"({reason}); its current value is not the one this lane wrote.");
@@ -159,6 +166,7 @@ namespace PeakSafeOptimizer
             }
             catch (Exception ex)
             {
+                // The write-back failed, so the engine may still be reusing: leave the guards active
                 _log?.LogError($"Collision callback reuse restore failed safely: {ex.GetType().Name}: {ex.Message}");
             }
         }

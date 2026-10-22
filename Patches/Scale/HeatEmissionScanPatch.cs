@@ -190,8 +190,11 @@ namespace PeakSafeOptimizer.Patches.Scale
                 if (afflictions == null)
                     continue;
 
+                // A null photonView falls through to SubtractStatus, which is where vanilla would
+                // have dereferenced it
                 if (ownerShortCircuit && afflictionsCharacterRef != null &&
-                    afflictionsCharacterRef(afflictions) == candidate && !candidate.photonView.IsMine)
+                    afflictionsCharacterRef(afflictions) == candidate &&
+                    candidate.photonView != null && !candidate.photonView.IsMine)
                 {
                     continue;
                 }

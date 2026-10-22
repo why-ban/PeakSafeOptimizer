@@ -8,10 +8,12 @@ using UnityEngine;
 namespace PeakSafeOptimizer.Patches.ScaleExperimental
 {
     /// <summary>
-    /// Same-frame coalescing for CharacterItems.RefreshAllCharacterCarryWeightRPC. A call is skipped only
+    /// Same-frame coalescing for CharacterItems.RefreshAllCharacterCarryWeightRPC: a call is skipped only
     /// when an earlier call in the same frame already ran the original with the same folded content
-    /// signature, so the skipped one would have been a no-op: UpdateWeight recomputes from scratch and its
-    /// SetStatus writes are absolute. The signature is a hash, so a collision drops a refresh.
+    /// signature. UpdateWeight recomputes from scratch and its SetStatus writes are absolute, so no state
+    /// is lost; for a non-local character the skipped call also drops a duplicate StatusSFX and
+    /// PlayParticle, which the duplicate RPC would have replayed rather than added to. The signature is a
+    /// hash, so a collision drops a refresh.
     /// </summary>
     internal static class WeightRefreshCoalescingPatch
     {

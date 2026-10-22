@@ -36,7 +36,7 @@ namespace PeakSafeOptimizer.Patches.Scale
         private const string StoneTag = "Stone1";
         private const string SnowballTag = "Snowball";
 
-        private static readonly ConditionalWeakTable<Snowball, Snapshot> Snapshots =
+        private static ConditionalWeakTable<Snowball, Snapshot> Snapshots =
             new ConditionalWeakTable<Snowball, Snapshot>();
 
         private static AccessTools.FieldRef<Snowball, Collision> _unprocessedContact;
@@ -136,6 +136,9 @@ namespace PeakSafeOptimizer.Patches.Scale
             _minimumSpeedToGrow = minimumSpeedRef;
             _scaleSyncer = scaleSyncerRef;
             _updateMass = updateMassDelegate;
+            // Fresh table per install: a snapshot left by the previous install describes a Collision
+            // instance the engine may already have recycled
+            Snapshots = new ConditionalWeakTable<Snowball, Snapshot>();
         }
 
         internal static MethodInfo ResolveStayTarget()
@@ -164,6 +167,7 @@ namespace PeakSafeOptimizer.Patches.Scale
             _minimumSpeedToGrow = null;
             _scaleSyncer = null;
             _updateMass = null;
+            Snapshots = new ConditionalWeakTable<Snowball, Snapshot>();
         }
 
         internal static bool StayPrefix(Snowball __instance, Collision other)
