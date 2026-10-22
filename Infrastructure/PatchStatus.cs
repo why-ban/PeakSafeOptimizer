@@ -212,8 +212,9 @@ namespace PeakSafeOptimizer.Infrastructure
                 Line($"compatibility mode: {CompatibilityMode}"),
                 Line(string.Equals(CompatibilityMode, "certified", StringComparison.Ordinal)
                     ? "mode meaning: MVID matches the audited build; patch validation still runs and is still authoritative."
-                    : "mode meaning: MVID is unknown (game update or different build). Structural guards still " +
-                      "validate independently; behavior-replacement patches requiring the audited build skip safely.")
+                    : "mode meaning: MVID is unknown (game update or different build). Every patch still " +
+                      "validates and installs on its own assertions; the Fingerprint and StrictIl lines below " +
+                      "are the ones worth re-reading against a fresh decompile.")
             };
             // `skipped` is the coarse Skipped bucket, which also holds Uninstalled entries. On the
             // startup path there are none (Install never uninstalls into the status it returns), so

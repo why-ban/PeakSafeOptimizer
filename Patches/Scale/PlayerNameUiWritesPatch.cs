@@ -338,29 +338,32 @@ namespace PeakSafeOptimizer.Patches.Scale
                 // exception in that chain must reproduce through the untouched original, so it is caught
                 // here and handed back before this patch writes anything.
                 //
-                // The chain got longer in this build and the catch is now doing real work rather than
+                // The chain is longer than it once was and the catch is doing real work rather than
                 // guarding a theoretical case. NetworkingUtilities.GetUserId used to be a single
-                // photonView.Owner.UserId read; it now dereferences Player.character.data, and on a
-                // first call for a player it reads photonView.Owner.CustomProperties and runs
-                // ulong.Parse on the stored value. Player.character, the Owner and the parse are three
-                // independent throw sites where there used to be one.
+                // photonView.Owner.UserId read; it now dereferences Player.character and then
+                // CharacterData.userID, and when that string is empty it falls back to reading
+                // photonView.Owner.CustomProperties. Player.character, CharacterData, the Owner and the
+                // CustomProperties table are independent throw sites where there used to be one. Game
+                // 2.6.b dropped the ulong.Parse that used to sit on the fallback path - userID is a
+                // string field now - so an unparseable id can no longer throw, but the dereferences can.
                 //
-                // GetUserId also became side-effecting: on that first call it caches the parsed id into
-                // CharacterData.userID. That is why the call stays exactly where vanilla makes it, on
-                // the visible path only and only for a Unity-alive characterInteractable - the
-                // interactable-null deferral above is what guarantees the second half, because vanilla
-                // reaches GetUserId through a `(bool)characterInteractable &&` short circuit on the same
-                // reference. The caching write is idempotent and order-independent with respect to
-                // everything else here, so performing it before this patch's UI writes rather than after
-                // them, as vanilla does, is not observable: a handed-back call re-runs GetUserId, finds
-                // the id already cached and returns the same string.
+                // GetUserId also became side-effecting: when CharacterData.userID is empty it caches
+                // the id it read from the CustomProperties table. That is why the call stays exactly
+                // where vanilla makes it, on the visible path only and only for a Unity-alive
+                // characterInteractable - the interactable-null deferral above is what guarantees the
+                // second half, because vanilla reaches GetUserId through a
+                // `(bool)characterInteractable &&` short circuit on the same reference. The caching
+                // write is idempotent and order-independent with respect to everything else here, so
+                // performing it before this patch's UI writes rather than after them, as vanilla does,
+                // is not observable: a handed-back call re-runs GetUserId, finds the id already cached
+                // and returns the same string.
                 //
                 // The one visible difference is a log line. When the player has no UserID custom
-                // property GetUserId writes a Debug.LogError and leaves the id at 0; if this Prefix then
-                // defers on the owner lookup below, vanilla runs the whole method again and logs it a
-                // second time. That is a duplicated diagnostic in a state that is already broken, and
-                // the alternative - deferring before calling GetUserId at all - would give up the patch
-                // on every visible name.
+                // property GetUserId writes a Debug.LogError and returns an empty string; if this
+                // Prefix then defers on the owner lookup below, vanilla runs the whole method again and
+                // logs it a second time. That is a duplicated diagnostic in a state that is already
+                // broken, and the alternative - deferring before calling GetUserId at all - would give
+                // up the patch on every visible name.
                 try
                 {
                     otherPlayer = other.player;
@@ -370,9 +373,10 @@ namespace PeakSafeOptimizer.Patches.Scale
                         return true;
                     }
 
-                    // GetUserId now returns CharacterData.userID.ToString(), which cannot be null. The
-                    // test is kept because it costs one branch and is what makes the following line
-                    // safe if the accessor ever goes back to returning Owner.UserId, which could.
+                    // GetUserId now returns CharacterData.userID directly - a string field that starts
+                    // out empty rather than null. The test is kept because it costs one branch and is
+                    // what makes the following line safe if the accessor ever goes back to returning
+                    // Owner.UserId, which could.
                     string userId = NetworkingUtilities.GetUserId(otherPlayer);
                     if (userId == null)
                         return true;

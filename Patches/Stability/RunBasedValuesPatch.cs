@@ -25,7 +25,7 @@ namespace PeakSafeOptimizer.Patches.Stability
     /// value that reaches the serializer on the hot path is read out of a *property*:
     /// <c>AchievementManager.runBasedValueData { get; private set; }</c>
     /// (AchievementManager.cs:150), consumed by
-    /// <c>Player.Update</c> → <c>photonView.RPC("UpdateAchievementProgress", RpcTarget.Others,
+    /// <c>Player.Update</c> → <c>photonView.RPC("UpdateAchievementProgress", RpcTarget.All,
     /// Singleton&lt;AchievementManager&gt;.Instance.runBasedValueData)</c> (Player.cs:77), which Photon
     /// then hands to <c>CustomTypeRPCSerialization.SerializeAchievementProgress</c>
     /// (CustomTypeRPCSerialization.cs:28-39, registered for this type at :17) and that calls
@@ -46,11 +46,12 @@ namespace PeakSafeOptimizer.Patches.Stability
     ///
     /// BEHAVIOUR DIFFERENCE - not "identical except for the exception". Vanilla throws out of
     /// <c>SerializeRunBasedValues</c>, which propagates through <c>Serialize</c> and
-    /// <c>SerializeAchievementProgress</c>, so the RPC never leaves: remotes receive nothing at all.
+    /// <c>SerializeAchievementProgress</c>, so the RPC never leaves: no client receives anything.
     /// With the guard the RPC is sent with <c>count = 0</c> for both dictionaries, and the receiving
     /// side's <c>Deserialize</c> calls <c>Allocate()</c> before
     /// <c>DeserializeRunBasedValues</c> (SerializableRunBasedValues.cs:70-71), which clears and then
-    /// reads zero entries (:97-115) - so the remote ends up with allocated-but-empty
+    /// reads zero entries (:97-115) - so every receiving client, the sender included because the RPC
+    /// goes to <c>RpcTarget.All</c> as of game 2.6.b, ends up with allocated-but-empty
     /// <c>runBasedInts</c>/<c>runBasedFloats</c>, and <c>ReconnectHandler.UpdateAchievementProgress</c>
     /// (ReconnectHandler.cs:143-151) stores that record. The change is "RPC fails, nothing is
     /// recorded" → "RPC succeeds, this group of values is recorded as empty".
