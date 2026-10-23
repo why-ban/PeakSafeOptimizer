@@ -13,7 +13,8 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// idempotent and the material stays the source of truth, so a write is skipped only while it already
     /// holds the value. isSpeaking is still assigned every frame because PlayerEyeLook.Update reads it.
     /// The character aliveness test stays a Unity one because vanilla's guard is one, while everything read
-    /// off it is managed. The push-to-talk setting is read only for a local, alive character.
+    /// off it is managed. The push-to-talk setting is read only for a local, alive character, and a remote
+    /// mouth with no voice handler is skipped the way vanilla's guard skips it.
     /// </summary>
     internal static class AnimatedMouthMaterialPatch
     {
@@ -85,6 +86,9 @@ namespace PeakSafeOptimizer.Patches.Scale
                 throw new InvalidOperationException("PushToTalkType values are no longer defined");
             }
 
+            ScaleValidation.RequireStaticMethod(
+                typeof(AnimatedMouth), "MicrophoneLevelMaxDecibels", typeof(float),
+                new[] { typeof(float) }, true);
             ScaleValidation.RequireStaticMethod(
                 typeof(Shader), "PropertyToID", typeof(int), new[] { typeof(string) }, true);
             ScaleValidation.RequireInstanceMethod(
@@ -201,6 +205,13 @@ namespace PeakSafeOptimizer.Patches.Scale
                 return false;
             }
 
+            bool isLocal = character.IsLocal;
+            // Vanilla's guard skips the body for a remote character without a voice handler, so the two
+            // reads below would fault where vanilla never reaches them. It sits above the renderer
+            // guards so that a legal state cannot report a repair.
+            if (!isLocal && __instance.VoiceHandler == null)
+                return false;
+
             // Dereferenced unguarded once the guard passes, so a null here is a vanilla fault
             Renderer mouthRenderer = __instance.mouthRenderer;
             if (mouthRenderer == null)
@@ -215,8 +226,6 @@ namespace PeakSafeOptimizer.Patches.Scale
                 RateLimitedDiagnostics.Hit("AnimatedMouthMaterial.mouthTextures-empty");
                 return true;
             }
-
-            bool isLocal = character.IsLocal;
 
             float level;
             if (isLocal)

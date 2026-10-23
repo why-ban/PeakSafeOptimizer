@@ -15,6 +15,7 @@ namespace PeakSafeOptimizer.Patches.Stability
     /// Player is compared by reference, not Unity null, because vanilla only reads managed fields on it.
     /// Character.player dereferences PlayerHandler.Instance and view.Owner unguarded, hence the catch.
     /// handlerOwner != character is stricter than vanilla, which resolves the player through the handler.
+    /// The backpackSlot test guards activeBackpackVisuals, whose getter dereferences it unguarded.
     /// Bots are excluded from the player-null reason because they have no Photon Player at all.
     /// </summary>
     internal static class ParachutePatch

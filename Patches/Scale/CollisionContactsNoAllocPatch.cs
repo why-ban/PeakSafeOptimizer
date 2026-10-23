@@ -66,6 +66,9 @@ namespace PeakSafeOptimizer.Patches.Scale
             ScaleValidation.RequireInstanceField(typeof(Character), "refs", typeof(Character.CharacterRefs));
             ScaleValidation.RequireInstanceField(
                 typeof(Character.CharacterRefs), "view", typeof(PhotonView));
+            ScaleValidation.RequireInstanceProperty(typeof(Collision), "contactCount", typeof(int));
+            ScaleValidation.RequireInstanceMethod(
+                typeof(Collision), "GetContact", typeof(ContactPoint), new[] { typeof(int) }, true);
             ScaleValidation.RequireInstanceProperty(typeof(Character), "IsLocal", typeof(bool));
             RequireRocketRpc();
             RequireGroundSampleShape();

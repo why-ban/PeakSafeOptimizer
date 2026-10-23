@@ -2,7 +2,7 @@
 
 A performance mod for PEAK aimed at the case that actually hurts: **a full lobby standing in one place**.
 
-Most of what it does is invisible. Most of its 37 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. A handful trade a little appearance or animation fidelity for frames; those are called out under the switches below. **Every patch is on by default**, so a fresh install is already the configuration this release was audited and played in.
+Most of what it does is invisible. Most of its 36 patches are *equivalence-proven* - they produce bit-for-bit the same result as the vanilla code, just with less work - or they repair a vanilla fault that throws an exception every frame. A handful trade a little appearance or animation fidelity for frames; those are called out under the switches below. **Every patch is on by default**, so a fresh install is already the configuration this release was audited and played in.
 
 There are no numbers to tune. Every threshold is a constant in the code, next to the reasoning that picked it.
 
@@ -28,7 +28,7 @@ Works in multiplayer with vanilla players and with players who do not have the m
 
 ## What it actually does
 
-**Removes per-frame exception floods.** PEAK throws a few `NullReferenceException`s every single frame in situations that are easy to hit (rope climbing with an empty segment list, an incomplete local character while the emote wheel is up, hand IK during an item swap, two unguarded singletons while binoculars are raised). An exception per frame is not free. Seven guards cut those to zero - each one skips exactly the frame whose data is missing and defers to the untouched original otherwise, and each one mirrors the short circuits in the original so it never skips a frame vanilla would have survived. Those seven are independent switches, all in the stability lane. Measured in one session: 2315 + 1544 + 184 + 135 + 67 exceptions. Those counts predate the current guards and the emote-wheel figure in particular has not been re-measured against them, so treat them as the order of magnitude rather than the exact win. The binocular one alone was 1544 - one per frame for as long as anyone held the binoculars up, each costing a throw, a stack capture and a synchronous log write on the main thread.
+**Removes per-frame exception floods.** PEAK throws a few `NullReferenceException`s every single frame in situations that are easy to hit (rope climbing with an empty segment list, an incomplete local character while the emote wheel is up, hand IK during an item swap, two unguarded singletons while binoculars are raised). An exception per frame is not free. Seven guards cut those to zero - each one skips exactly the frame whose data is missing, and otherwise either defers to the untouched original or reproduces it statement for statement, so none of them skips a frame vanilla would have survived. Those seven are independent switches, all in the stability lane. Measured in one session: 2315 + 1544 + 184 + 135 + 67 exceptions. Those counts predate the current guards and the emote-wheel figure in particular has not been re-measured against them, so treat them as the order of magnitude rather than the exact win. The binocular one alone was 1544 - one per frame for as long as anyone held the binoculars up, each costing a throw, a stack capture and a synchronous log write on the main thread.
 
 **Cuts redundant native calls.** A large part of the per-frame cost in a multiplayer lobby is the game writing values that are already what it is about to write, or recomputing something it computed a moment ago. Examples: `Bodypart.Drag` multiplies two velocity vectors by exactly `1f` for every bodypart of every ragdolled character, 50 times a second; `Bodypart.AddMovementForce` adds the zero vector for everyone who is not pressing a movement key; the `LightVolume` lightmap is sampled per character per frame for voice occlusion when clustered players share the same voxel. These are skipped only when the skip is provably an identity.
 
@@ -76,10 +76,10 @@ Filter `BepInEx/LogOutput.log` for `PeakSafeOptimizer`. You should see:
 
 ```
 PeakSafeOptimizer | compatibility mode: certified
-PeakSafeOptimizer | totals: registered=37, enabled=37, applied=37, skipped=0, failed=0, module-failures=0
+PeakSafeOptimizer | totals: registered=36, enabled=36, applied=36, skipped=0, failed=0, module-failures=0
 ```
 
-`applied` should equal `enabled`, and with a default config both are 37. A lower `enabled` means you turned a switch off. `failed=0` and `module-failures=0` mean no patch hit a problem.
+`applied` should equal `enabled`, and with a default config both are 36. A lower `enabled` means you turned a switch off. `failed=0` and `module-failures=0` mean no patch hit a problem.
 
 `compatibility mode: structural-validation` instead of `certified` just means the running game build is not the one this release was last audited against. Every patch still validates and installs on its own merits; the label tells you to start re-reading from the `Fingerprint` and `StrictIl` entries.
 

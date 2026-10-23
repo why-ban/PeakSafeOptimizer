@@ -1,8 +1,8 @@
 {
     "name": "PeakSafeOptimizer",
-    "version_number": "1.5.0",
+    "version_number": "1.5.1",
     "website_url": "",
-    "description": "Performance mod for PEAK. 37 patches, all on by default: equivalence-proven rewrites or vanilla crash fixes, each with fail-closed member validation, plus a switch for every one.",
+    "description": "Performance mod for PEAK. 36 patches, all on by default: equivalence-proven rewrites or vanilla crash fixes, each with fail-closed member validation, plus a switch per patch or patch group.",
     "dependencies": [
         "BepInEx-BepInExPack_PEAK-5.4.75301"
     ]

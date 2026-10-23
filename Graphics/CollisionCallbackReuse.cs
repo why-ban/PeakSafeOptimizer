@@ -69,8 +69,14 @@ namespace PeakSafeOptimizer
 
             if (wanted == _applied)
             {
-                if (!wanted && !_loggedBlocked && (OptimizerConfig.CollisionCallbackReuse?.Value ?? false))
-                    LogBlocked(installer);
+                if (!wanted)
+                {
+                    // Cleared while the switch is off, so an off-on cycle explains itself again
+                    if (!(OptimizerConfig.CollisionCallbackReuse?.Value ?? false))
+                        _loggedBlocked = false;
+                    else if (!_loggedBlocked)
+                        LogBlocked(installer);
+                }
                 return;
             }
             // A later successful install clears the warning so a re-block is reported again

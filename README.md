@@ -1,12 +1,12 @@
 # PeakSafeOptimizer
 
 A performance mod for **PEAK** (Unity 6, BepInEx 5) aimed at the case that actually hurts: a full
-lobby standing in one place. 37 Harmony patches, all on by default, each one either an
+lobby standing in one place. 36 Harmony patches, all on by default, each one either an
 equivalence-proven rewrite of a hot vanilla method or a guard for a vanilla fault that throws an
 exception every frame.
 
 - Thunderstore: [current page](https://thunderstore.io/c/peak/p/khalil2/) · [old page, frozen at 1.4.1](https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/)
-- Release line: 1.5.0, audited against PEAK 2.6.b
+- Release line: 1.5.1, audited against PEAK 3.0.0
 - License: MIT
 
 > **This mod has moved to a new Thunderstore account.** The account that owns the old page is bound to a
@@ -21,17 +21,17 @@ exception every frame.
   shipped.
 - **Fail closed.** Every patch asserts the exact shape of every game member it reads before it installs.
   A shape that does not match keeps that one patch out (`SkippedStructureMismatch`) and leaves the other
-  36 untouched. There is deliberately no build-level gate: an earlier version skipped almost the whole
+  35 untouched. There is deliberately no build-level gate: an earlier version skipped almost the whole
   mod on any game update before a single patch got to check what it actually reads.
 - **No numbers to tune.** Every threshold is a named constant next to the argument for it. Configuration
-  is one boolean per patch.
+  is one boolean per patch, or one per patch group where several patches are only correct together.
 - **Two engine-level lanes** (`Physics.reuseCollisionCallbacks`, `QualitySettings.skinWeights`) snapshot
   the value they find and restore it on toggle and on shutdown, and only while it is still the value
   they wrote.
 
 ## Install
 
-[Thunderstore](https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/) via a mod manager, or drop
+[Thunderstore](https://thunderstore.io/c/peak/p/khalil2/) via a mod manager, or drop
 `PeakSafeOptimizer.dll` into `PEAK/BepInEx/plugins/`.
 
 ## Build from source
@@ -74,7 +74,7 @@ There is no test project. The startup log is the contract: filter `BepInEx/LogOu
 
 ```
 compatibility mode: certified
-totals: registered=37, enabled=37, applied=37, skipped=0, failed=0, module-failures=0
+totals: registered=36, enabled=36, applied=36, skipped=0, failed=0, module-failures=0
 ```
 
 `applied` should equal `enabled`, and `failed=0` with `module-failures=0` means no patch hit a problem.
@@ -95,7 +95,7 @@ $aMap = @{}; $fa | ForEach-Object { $aMap[$_.rel] = $_.h }
 $fb | Where-Object { $aMap[$_.rel] -ne $_.h } | Select-Object -ExpandProperty rel
 ```
 
-Then check whether any of the 37 target methods is in that list. If none is, the update needs no
+Then check whether any of the 36 patch targets is in that list. If none is, the update needs no
 adaptation; if one is, the patch whose target changed is the one to re-read.
 
 ## Contributing

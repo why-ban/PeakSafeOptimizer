@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.5.1
+
+Game 3.0.0 (`Assembly-CSharp` MVID `b5521262-...`), a generational update. Hash-diffing the two
+decompiled trees: 85 source files changed and 7 are new, none removed. `Assembly-CSharp` accounts for
+75 of the changes and 6 of the additions; the rest are one or two files each in `Platforms`,
+`EpicCommon`, `HBAO.Universal.Runtime`, `Managers`, `Photon`, `PlatformProviders`, `SteamCommon`,
+`User` and `Utilities`. The assembly now carries 1697 type definitions, 39 more than 2.6.b. Every
+patch target was re-read against the new bodies.
+
+The update also changed how the game ships its content, which is why the numbers in older sections no
+longer apply: the levels left the build. `globalgamemanagers` now lists five scenes - `Pretitle`,
+`Title`, `MainMenu`, `Airport`, `WilIsland` - and the 208 gameplay scenes `Level_0` through `Level_207`
+are streamed at runtime from seven asset bundles in `PEAK_Data/StreamingAssets/maps`. The base assets
+went back to split serialized files, 1.67 GB against the single 1.5 GB bundle that 2.6.b shipped.
+
+### One patch deleted
+
+`EyeLookComponentCache` replaced `PlayerEyeLook.Update`. 3.0.0 rewrote that method and did all four
+things the patch existed for, in a single pass: the per-candidate `GetComponent<AnimatedMouth>()` is
+now a `refs.animatedMouth` field read, `Vector3.Distance` became `sqrMagnitude`, `GetBodypart(Head)`
+is hoisted out of the loop, and `Shader.PropertyToID("_EyePosition")` is cached in a readonly field.
+
+Against that, our replacement was no longer merely redundant but slower: it walked the roster twice,
+took a square root and re-read the `Character.Center` property per candidate, called `GetBodypart` two
+more times, and re-added a `transform.InverseTransformDirection` call whose result vanilla 3.0.0 had
+just deleted. Nothing else in the mod reads the fields it wrote, so removing it costs nothing.
+
+### One defect fixed
+
+`AnimatedMouthMaterial` fully replaces `AnimatedMouth.ProcessMicData`, and 3.0.0 added a clause to
+that method's guard: `character.IsLocal || VoiceHandler != null`. The replacement body had no
+counterpart, so a remote character's mouth without a voice handler would have dereferenced a null
+`VoiceHandler` twice per frame - on every `AnimatedMouth` in the scene, since `Update` calls
+`ProcessMicData` unconditionally. The guard is now reproduced, evaluated in vanilla's order, before
+the two material-write paths.
+
+### Also in this release
+
+- `BodypartDragIdentity`'s docstring argued about `CharacterMovement.AdjustDrag`, which 3.0.0 deleted
+  along with its four call sites. The argument survives without it - vanilla now passes the drag value
+  through untouched - so the sentence is gone rather than rewritten.
+- `ParachutePatch` documents why it tests `player.backpackSlot` when vanilla's `UpdateHasParachute`
+  never reads it: `CharacterBackpackHandler.activeBackpackVisuals` dereferences it unguarded.
+- Three assertions added for members a patch reads but did not assert: `Campfire.transform`,
+  `Collision.contactCount` with `Collision.GetContact(int)`, and
+  `AnimatedMouth.MicrophoneLevelMaxDecibels`.
+- `BuildFingerprint.CurrentAssemblyCSharpMvid` moved to the 3.0.0 assembly, so a default install
+  reports `compatibility mode: certified` again instead of asking the reader to re-audit a build that
+  has been audited.
+- `Experimental.CollisionCallbackReuse` now re-arms its "stays off, it needs both Snowball guards"
+  warning when the switch is turned off, so switching it back on explains itself again instead of
+  staying silent because it had already said so once.
+
+### Verified, not assumed
+
+Two claims this mod rests on are asset claims, so both were re-decoded from the 3.0.0 files rather
+than carried over. The three `ExplosionEffect` prefabs are unchanged from 2.6.b in every field
+`ExplosionScale` depends on: `baseScale` 0.5/0.5/1.0, `explosionPointCount` 3/3/3,
+`subExplosionPointCount` 0/0/2, `explosionRadius` 1/1/6. And the body part census still shows 127
+instances across 18 distinct part types with no mouth, jaw, toe, shoulder or finger part anywhere,
+which is what the deletion of `DetailBodypartThrottle` in 1.5.0 was based on.
+
 ## 1.5.0
 
 Game 2.6.b (`Assembly-CSharp` MVID `60e20675-...`). Scoping the update by hash-diffing the two

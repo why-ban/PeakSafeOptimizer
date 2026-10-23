@@ -8,8 +8,7 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// <summary>
     /// Identity filter for Bodypart.Drag(float, bool). At an effective drag of exactly 1f both writes are
     /// v * 1f and cannot change the stored value, which is what makes the skip equivalent. Owner and data
-    /// are reference tested because the original reads only managed members there. AdjustDrag is
-    /// deliberately not asserted: 1 - (1 - d) * k == 1 forces d == 1, so it cannot widen the skip.
+    /// are reference tested because the original reads only managed members there.
     /// </summary>
     internal static class BodypartDragIdentityPatch
     {

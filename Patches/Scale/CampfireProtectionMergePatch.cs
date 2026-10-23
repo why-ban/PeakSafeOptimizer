@@ -30,6 +30,8 @@ namespace PeakSafeOptimizer.Patches.Scale
             FieldInfo timebuffField = ScaleValidation.RequireInstanceField(
                 typeof(Campfire), "_timebuffLastApplied", typeof(float));
             ScaleValidation.RequireInstanceField(typeof(Campfire), "moraleBoostRadius", typeof(float));
+            ScaleValidation.RequireInheritedInstanceProperty(
+                typeof(Campfire), "transform", typeof(Transform));
 
             FieldInfo buffField = typeof(Campfire).GetField(
                 "s_CampfireBuff", BindingFlags.Static | BindingFlags.NonPublic);

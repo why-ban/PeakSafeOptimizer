@@ -12,7 +12,7 @@ namespace PeakSafeOptimizer.Infrastructure
         // leaves the members a patch reads unchanged keeps that patch working without a release. When
         // the log shows structural-validation, the Fingerprint and StrictIl patches are the ones worth
         // re-reading
-        public static readonly Guid CurrentAssemblyCSharpMvid = new Guid("60e20675-8e5a-4ad9-9b5a-c31f273b85fc");
+        public static readonly Guid CurrentAssemblyCSharpMvid = new Guid("b5521262-0ce1-4a6c-a2bb-f18e027e413e");
 
         private BuildFingerprint(Guid actualMvid, string sha256)
         {
