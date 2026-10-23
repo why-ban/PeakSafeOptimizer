@@ -40,10 +40,6 @@ namespace PeakSafeOptimizer.Patches.Scale
             {
                 throw new InvalidOperationException("Campfire.s_CampfireBuff failed structural self-check");
             }
-            AccessTools.FieldRef<Affliction_NoHunger> campfireBuffGetter =
-                AccessTools.StaticFieldRefAccess<Affliction_NoHunger>(buffField);
-            if (campfireBuffGetter == null)
-                throw new InvalidOperationException("Campfire.s_CampfireBuff getter creation failed");
 
             ScaleValidation.RequireStaticField(typeof(Character), "localCharacter", typeof(Character));
             ScaleValidation.RequireStaticProperty(typeof(PlayerHandler), "Exists", typeof(bool));
@@ -67,11 +63,13 @@ namespace PeakSafeOptimizer.Patches.Scale
             ScaleValidation.RequireInstanceProperty(
                 typeof(OrbFogHandler), "PlayersAreResting", typeof(bool));
 
+            AccessTools.FieldRef<Affliction_NoHunger> campfireBuffGetter =
+                AccessTools.StaticFieldRefAccess<Affliction_NoHunger>(buffField);
             AccessTools.FieldRef<Campfire, List<Character>> charactersInRadius =
                 AccessTools.FieldRefAccess<Campfire, List<Character>>(charactersInRadiusField);
             AccessTools.FieldRef<Campfire, float> timebuff =
                 AccessTools.FieldRefAccess<Campfire, float>(timebuffField);
-            if (charactersInRadius == null || timebuff == null)
+            if (campfireBuffGetter == null || charactersInRadius == null || timebuff == null)
                 throw new InvalidOperationException("CampfireProtectionMerge accessor creation failed");
 
             _charactersInRadius = charactersInRadius;

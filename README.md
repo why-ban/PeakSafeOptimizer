@@ -96,7 +96,7 @@ $aMap = @{}; $fa | ForEach-Object { $aMap[$_.rel] = $_.h }
 $fb | Where-Object { $aMap[$_.rel] -ne $_.h } | Select-Object -ExpandProperty rel
 ```
 
-Then check whether any of the 36 patch targets is in that list. If none is, the update needs no
+Then check whether any of the 34 target methods is in that list. If none is, the update needs no
 adaptation; if one is, the patch whose target changed is the one to re-read.
 
 ## Contributing
