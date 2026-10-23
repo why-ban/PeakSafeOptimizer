@@ -18,7 +18,7 @@ namespace PeakSafeOptimizer
     {
         public const string PluginGuid = "com.peak.safeoptimizer";
         public const string PluginName = "PeakSafeOptimizer";
-        public const string PluginVersion = "1.5.1";
+        public const string PluginVersion = "1.6.0";
 
         private Harmony _harmony;
         private LifecycleRegistry _lifecycle;

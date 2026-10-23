@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.1
+## 1.6.0
 
 - Updated for game 3.0.0.
 - Removed `EyeLookComponentCache`. The game now does the same optimisation itself, and does it faster than this patch did.

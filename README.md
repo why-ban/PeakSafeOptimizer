@@ -6,7 +6,7 @@ equivalence-proven rewrite of a hot vanilla method or a guard for a vanilla faul
 exception every frame.
 
 - Thunderstore: [current page](https://thunderstore.io/c/peak/p/khalil2/) · [old page, frozen at 1.4.1](https://thunderstore.io/c/peak/p/khalil/PeakSafeOptimizer/)
-- Release line: 1.5.1, audited against PEAK 3.0.0
+- Release line: 1.6.0, audited against PEAK 3.0.0
 - License: MIT
 
 > **This mod has moved to a new Thunderstore account.** The account that owns the old page is bound to a

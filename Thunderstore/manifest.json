@@ -1,6 +1,6 @@
 {
     "name": "PeakSafeOptimizer",
-    "version_number": "1.5.1",
+    "version_number": "1.6.0",
     "website_url": "",
     "description": "Performance mod for PEAK. 36 patches, all on by default: equivalence-proven rewrites or vanilla crash fixes, each with fail-closed member validation, plus a switch per patch or patch group.",
     "dependencies": [
