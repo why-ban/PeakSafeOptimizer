@@ -6,14 +6,14 @@ Game 3.0.0 (`Assembly-CSharp` MVID `b5521262-...`), a generational update. Hash-
 decompiled trees: 85 source files changed and 7 are new, none removed. `Assembly-CSharp` accounts for
 75 of the changes and 6 of the additions; the rest are one or two files each in `Platforms`,
 `EpicCommon`, `HBAO.Universal.Runtime`, `Managers`, `Photon`, `PlatformProviders`, `SteamCommon`,
-`User` and `Utilities`. The assembly now carries 1697 type definitions, 39 more than 2.6.b. Every
+`User` and `Utilities`. The assembly now carries 1697 type definitions against 2.6.b's 1658. Every
 patch target was re-read against the new bodies.
 
 The update also changed how the game ships its content, which is why the numbers in older sections no
 longer apply: the levels left the build. `globalgamemanagers` now lists five scenes - `Pretitle`,
 `Title`, `MainMenu`, `Airport`, `WilIsland` - and the 208 gameplay scenes `Level_0` through `Level_207`
 are streamed at runtime from seven asset bundles in `PEAK_Data/StreamingAssets/maps`. The base assets
-went back to split serialized files, 1.67 GB against the single 1.5 GB bundle that 2.6.b shipped.
+went back to split serialized files, 1.67 GiB against the single 1.5 GiB bundle that 2.6.b shipped.
 
 ### One patch deleted
 

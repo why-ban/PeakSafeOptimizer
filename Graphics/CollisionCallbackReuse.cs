@@ -137,7 +137,11 @@ namespace PeakSafeOptimizer
         /// clears its state in a finally: there the snapshot flag doubles as the rising-edge detector,
         /// so a failed write-back that skipped teardown would poison the next enable. Here the rising
         /// edge re-samples unconditionally and the snapshot flag is only a "nothing to undo"
-        /// short-circuit, so leaving it set after a failed write-back costs nothing.
+        /// short-circuit, so leaving it set after a failed write-back costs nothing in the normal case.
+        /// It does leave one residue: a write-back that threw keeps the snapshot and the flag, so the
+        /// next enable would sample this lane's own write as the original. That needs a throwing setter
+        /// and a later re-enable, and clearing the state there would be worse - the engine may still be
+        /// reusing, and the guards must stay up.
         /// </summary>
         private void Restore(string reason)
         {

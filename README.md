@@ -51,7 +51,8 @@ pwsh -File Thunderstore\pack.ps1
 ```
 
 `pack.ps1` builds first, then fails loudly if `manifest.json`'s `version_number` does not match the
-assembly's `FileVersion`, so the published page and the in-game plugin list can never disagree.
+assembly's `FileVersion` or `Plugin.PluginVersion`, so the published page, the in-game plugin list and
+the log line can never disagree.
 
 ## Layout
 

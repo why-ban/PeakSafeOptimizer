@@ -15,7 +15,7 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// constructor and Decompress, both create a new Texture3D, so a reference change is exactly a bake
     /// change and nothing mutates a live volume. Holding the reference keeps the old wrapper alive,
     /// which makes ReferenceEquals exact where an instance id can be reused, and retains one stale bake
-    /// until the next level's first sample replaces it.
+    /// until the next successful sample replaces it.
     ///
     /// The Postfix re-derives the key from the same arguments rather than carrying it through __state,
     /// which would allocate on every call; TryResolve is pure, so the two derivations cannot disagree.

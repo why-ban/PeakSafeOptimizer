@@ -46,6 +46,8 @@ namespace PeakSafeOptimizer.Patches.ScaleExperimental
         private const float NearDistance = 50f;
         private const float FarDistance = 120f;
 
+        // Positions are never cleared, so Reset only has to stamp the times: a slot is live only while
+        // its _clusterTimes entry is finite
         private static readonly Vector3[] _clusterPositions = new Vector3[RingCapacity];
         private static readonly float[] _clusterTimes = CreateEmptyTimes();
         private static int _clusterWriteIndex;

@@ -11,7 +11,8 @@ namespace PeakSafeOptimizer.Patches.Scale
     /// <summary>
     /// Full equivalent replacement of AnimatedMouth.ProcessMicData(float[]). Both material writes are
     /// idempotent and the material stays the source of truth, so a write is skipped only while it already
-    /// holds the value. isSpeaking is still assigned every frame because PlayerEyeLook.Update reads it.
+    /// holds the value. isSpeaking is still assigned on every frame the guard passes, because
+    /// PlayerEyeLook.Update reads it.
     /// The character aliveness test stays a Unity one because vanilla's guard is one, while everything read
     /// off it is managed. The push-to-talk setting is read only for a local, alive character, and a remote
     /// mouth with no voice handler is skipped the way vanilla's guard skips it.
